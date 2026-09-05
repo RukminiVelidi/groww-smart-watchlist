@@ -9,6 +9,7 @@ without the user configuring a single alert.
 > the opposite: the **system** decides what's meaningful and ranks it for you.
 
 **Live:** https://groww-smart-watchlist-rukmini1.vercel.app
+**Design doc (architecture, diagrams, trade-offs):** [DESIGN.md](./DESIGN.md)
 
 ---
 
