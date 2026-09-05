@@ -63,10 +63,20 @@ export default function Home() {
     });
   }, [refresh]);
 
-  // Live-ish: re-pull the dashboard every 15s so the view reflects new polls.
+  // Keep data fresh. In production a server Cron polls on a schedule
+  // (see vercel.json). On Vercel's free tier, cron is limited to once/day, so
+  // active sessions also trigger the SHARED poll every 30s — the fetch is still
+  // O(unique symbols), not per-user. We then re-pull the dashboard.
   useEffect(() => {
     if (!handle) return;
-    const t = setInterval(refresh, 15000);
+    const t = setInterval(async () => {
+      try {
+        await fetch("/api/poll");
+      } catch {
+        /* poll is best-effort; the dashboard still renders last snapshots */
+      }
+      refresh();
+    }, 30000);
     return () => clearInterval(t);
   }, [handle, refresh]);
 

@@ -110,6 +110,11 @@ Browser (React) ── /api ──▶ App server (Next.js)
 - **One poller, no queue.** A single scheduled job is correct at this scale;
   a queue/stream would be over-engineering. I'd reach for one past ~thousands of
   symbols or sub-second freshness — stated, not hand-waved.
+- **Cron on the free tier.** Vercel Hobby caps Cron at once/day, so production
+  intent lives in `vercel.json` while active browser sessions also trigger the
+  *shared* poll every 30s. It's still O(unique symbols), not per-user — the same
+  scale property. A 1-min external pinger (e.g. cron-job.org → `/api/poll`) or
+  the Pro plan restores minute-level polling with zero code change.
 
 ---
 

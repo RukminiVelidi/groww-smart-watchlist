@@ -13,19 +13,18 @@ import type { Quote } from "@/lib/types";
 // the mock lets us script exact "meaningful change" scenarios for the demo.
 // ---------------------------------------------------------------------------
 
-const YAHOO_URL = "https://query1.finance.yahoo.com/v7/finance/quote";
+// Yahoo's v8 chart endpoint is crumb-free and reliable (the v7 quote endpoint
+// now requires an authenticated crumb). A 3-month daily window gives us the
+// live quote in `meta` AND the daily volume series, from which we derive a
+// stable average-volume baseline for the volume signal.
+const YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart";
 
 function toNum(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-async function fetchFromYahoo(symbols: string[]): Promise<Map<string, Quote>> {
-  const out = new Map<string, Quote>();
-  if (symbols.length === 0) return out;
-
-  const yahooSymbols = symbols.map((s) => `${s}.NS`).join(",");
-  const url = `${YAHOO_URL}?symbols=${encodeURIComponent(yahooSymbols)}`;
-
+async function fetchOneFromYahoo(symbol: string): Promise<Quote | null> {
+  const url = `${YAHOO_CHART}/${symbol}.NS?range=3mo&interval=1d`;
   const res = await fetch(url, {
     headers: {
       // Yahoo rejects requests without a browser-like UA.
@@ -33,44 +32,63 @@ async function fetchFromYahoo(symbols: string[]): Promise<Map<string, Quote>> {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
       Accept: "application/json",
     },
-    // Never let a slow upstream hang the request path.
-    signal: AbortSignal.timeout(6000),
+    signal: AbortSignal.timeout(6000), // never let a slow upstream hang us
   });
   if (!res.ok) throw new Error(`Yahoo ${res.status}`);
 
   const json = (await res.json()) as {
-    quoteResponse?: { result?: Record<string, unknown>[] };
+    chart?: {
+      result?: {
+        meta?: Record<string, unknown>;
+        indicators?: { quote?: { volume?: (number | null)[] }[] };
+      }[];
+    };
   };
-  const results = json?.quoteResponse?.result ?? [];
-  const now = new Date().toISOString();
+  const r = json?.chart?.result?.[0];
+  const meta = r?.meta;
+  if (!meta) return null;
 
-  for (const r of results) {
-    const symbol = String(r.symbol ?? "").replace(/\.NS$/, "");
-    const price = toNum(r.regularMarketPrice);
-    const prevClose = toNum(r.regularMarketPreviousClose);
-    if (!symbol || price === null || prevClose === null) continue; // skip garbage
+  const price = toNum(meta.regularMarketPrice);
+  const prevClose = toNum(meta.previousClose) ?? toNum(meta.chartPreviousClose);
+  if (price === null || prevClose === null) return null;
 
-    out.set(symbol, {
-      symbol,
-      price,
-      prevClose,
-      dayChangePct:
-        toNum(r.regularMarketChangePercent) ??
-        ((price - prevClose) / prevClose) * 100,
-      dayHigh: toNum(r.regularMarketDayHigh),
-      dayLow: toNum(r.regularMarketDayLow),
-      volume: toNum(r.regularMarketVolume),
-      avgVolume: toNum(r.averageDailyVolume3Month),
-      week52High: toNum(r.fiftyTwoWeekHigh),
-      week52Low: toNum(r.fiftyTwoWeekLow),
-      marketCap: toNum(r.marketCap),
-      // Yahoo doesn't expose circuit bands; NSE default for most is +/-20%.
-      upperCircuit: prevClose ? +(prevClose * 1.2).toFixed(2) : null,
-      lowerCircuit: prevClose ? +(prevClose * 0.8).toFixed(2) : null,
-      source: "yahoo",
-      fetchedAt: now,
-    });
-  }
+  // Average volume over the returned daily series — a stable baseline the
+  // volume-anomaly signal compares today's volume against.
+  const vols = (r?.indicators?.quote?.[0]?.volume ?? []).filter(
+    (v): v is number => typeof v === "number" && v > 0
+  );
+  const avgVolume =
+    vols.length > 0 ? vols.reduce((a, b) => a + b, 0) / vols.length : null;
+
+  return {
+    symbol,
+    price,
+    prevClose,
+    dayChangePct: ((price - prevClose) / prevClose) * 100,
+    dayHigh: toNum(meta.regularMarketDayHigh),
+    dayLow: toNum(meta.regularMarketDayLow),
+    volume: toNum(meta.regularMarketVolume),
+    avgVolume,
+    week52High: toNum(meta.fiftyTwoWeekHigh),
+    week52Low: toNum(meta.fiftyTwoWeekLow),
+    marketCap: null, // not exposed here; engine falls back to realized vol / prior
+    // Yahoo doesn't expose circuit bands; NSE default for most is +/-20%.
+    upperCircuit: +(prevClose * 1.2).toFixed(2),
+    lowerCircuit: +(prevClose * 0.8).toFixed(2),
+    source: "yahoo",
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+// Fetch each symbol's chart in parallel; one failure never blocks the others.
+async function fetchFromYahoo(symbols: string[]): Promise<Map<string, Quote>> {
+  const out = new Map<string, Quote>();
+  const settled = await Promise.allSettled(
+    symbols.map((s) => fetchOneFromYahoo(s))
+  );
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled" && r.value) out.set(symbols[i], r.value);
+  });
   return out;
 }
 
