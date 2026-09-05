@@ -72,6 +72,26 @@ Refinitiv for fundamentals and exchange feeds for prices/announcements). If a
 source is unreachable, the price path degrades to a clearly-labelled `mock`
 quote and the news path simply yields no events — the app never fabricates data.
 
+## Getting your holdings in (no manual typing)
+
+Three ways, so it works regardless of broker/API access:
+
+1. **Connect broker** — provider-agnostic (`lib/brokers/*`). A **Dhan** adapter is
+   live (free API, token-based); a **Groww** adapter is wired to the same
+   interface (Groww's TradeAPI is a ₹499/mo subscription, so it's a one-line
+   swap once keys exist). Connect once → holdings import → **Re-sync** pulls
+   newly-bought stocks. A truly universal button would sit on SEBI's Account
+   Aggregator via a registered FIU — noted as the production path.
+2. **File / paste import** — upload a broker CSV export or paste company names.
+   Names are matched to NSE symbols via Yahoo search with **ticker-first
+   validation + token-scored best match**, then validated against a live NSE
+   price so we never mis-map (e.g. Infosys→INFY, State Bank of India→SBIN, ITC→ITC;
+   unmatched names are reported, never guessed). Works with zero broker API.
+3. **Manual add** — the classic single-symbol box.
+
+Security: broker auth is via the broker's **official API token only** — the app
+never asks for a broker password.
+
 ## Architecture
 
 ```
