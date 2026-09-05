@@ -64,9 +64,8 @@ and in a way that persists across sessions and devices.
 | F1 | Create and manage a per-user watchlist (add/remove NSE symbols) |
 | F2 | Show latest market information per symbol (price, day change, volume) |
 | F3 | On return, compute and rank **what changed since last checked** |
-| F4 | Let the user widen the lookback window (since last checked / 24h / 7d / 30d) |
-| F5 | Persist state across sessions and devices |
-| F6 | Surface *why* each item matters in plain English |
+| F4 | Persist state across sessions and devices |
+| F5 | Surface *why* each item matters in plain English |
 
 ### 4.2 Non-functional
 
@@ -154,12 +153,12 @@ sequenceDiagram
     participant DB as Postgres
     participant E as Change Engine
 
-    U->>A: GET /api/watchlist?since=168
-    A->>S: buildDashboard(userId, sinceHours)
+    U->>A: GET /api/watchlist
+    A->>S: buildDashboard(userId)
     S->>DB: symbols for user
     S->>DB: latest snapshot per symbol
-    S->>DB: baseline snapshot (fetchedAt ≤ anchor)
-    S->>DB: news published since anchor
+    S->>DB: baseline snapshot (fetchedAt ≤ lastSeenAt)
+    S->>DB: news published since lastSeenAt
     S->>DB: daily returns (for realized volatility)
     S->>E: scoreSymbol(quote, baseline, returns, news)
     E-->>S: attentionScore + signals + headline
@@ -167,9 +166,9 @@ sequenceDiagram
     A-->>U: JSON → rendered, ranked list
 ```
 
-The **anchor** is either an explicit lookback window (`sinceHours`) or the user's
-`lastSeenAt` watermark. Staleness is computed at read time as a function of "now"
-— rows are never mutated to mark them stale.
+The anchor is always the user's `lastSeenAt` watermark — if nothing changed
+since then, the "needs attention" list is simply empty. Staleness is computed at
+read time as a function of "now"; rows are never mutated to mark them stale.
 
 ### 6.2 Write path — scheduled ingestion (fan-out control)
 
@@ -249,8 +248,8 @@ erDiagram
   entire class of read/write races by construction. `Snapshot` is intentionally
   *not* a foreign-key child of a user — it is shared, per-symbol market state.
 - **One watermark per user** (`lastSeenAt`) models the single, human-sized
-  concept "since I last checked". A `Since` selector overrides the anchor for
-  exploration without mutating the watermark.
+  concept "since I last checked". It advances only on an explicit "mark as seen";
+  if nothing changed since it, the attention list is empty — the honest result.
 - `SymbolMeta` caches the resolved company name and throttles news fetches
   (news changes far more slowly than price).
 
@@ -318,7 +317,7 @@ All data routes are `force-dynamic` and identity-scoped via the handle cookie.
 | Persistence | Postgres (server-side) | Browser `localStorage` | Cross-device is a hard requirement; client storage fails it |
 | Price history | Append-only snapshots | Mutate-in-place latest row | Correct deltas + race-free by construction |
 | Significance | Volatility-relative multi-signal | Fixed % threshold | Fixed % mis-scores stable and volatile names alike |
-| "Last checked" | One watermark + Since selector | Per-symbol watermarks | Matches the mental model without per-row noise |
+| "Last checked" | One watermark per user | Per-symbol watermarks / lookback selector | Faithful to "since I last checked"; no per-row noise, no scope creep |
 | Data | Real API + mock fallback | Mock-only / real-only | Real makes staleness genuine; fallback keeps it resilient |
 | Ingestion | Single per-symbol poller | Per-user polling / queue+stream | O(unique symbols); a queue would be over-engineering at this scale |
 

@@ -13,14 +13,10 @@ async function requireUser() {
   return userId;
 }
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const userId = await requireUser();
   if (!userId) return NextResponse.json({ error: "sign in" }, { status: 401 });
-  const sinceParam = new URL(req.url).searchParams.get("since");
-  const sinceHours = sinceParam ? Number(sinceParam) : undefined;
-  return NextResponse.json(
-    await buildDashboard(userId, Number.isFinite(sinceHours) ? sinceHours : undefined)
-  );
+  return NextResponse.json(await buildDashboard(userId));
 }
 
 export async function POST(req: NextRequest) {

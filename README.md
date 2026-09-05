@@ -24,9 +24,10 @@ npm run dev               # http://localhost:3000
 npm run smoke             # optional: prove the change engine with no DB/network
 ```
 
-Sign in with any handle → add NSE symbols (RELIANCE, TCS, INFY…) → use the
-**"Since"** selector (top-right) to see what changed over that window. Sign in
-with the same handle on another device to get the identical watchlist.
+Sign in with any handle → add NSE symbols (RELIANCE, TCS, INFY…). On return,
+the watchlist ranks what changed **since you last checked**; **Mark all as seen**
+advances that point. Sign in with the same handle on another device to get the
+identical watchlist.
 
 ---
 
@@ -92,9 +93,9 @@ Browser (React) ── /api ──▶ App server (Next.js)
   "diff since last checked" possible and correct, and it removes a whole class
   of read/write races by construction.
 - **One point-in-time watermark per user** (`lastSeenAt`). "Since you last
-  checked" is a single, human-sized concept. A **"Since" selector** lets the
-  user widen the window (24h / 7d / 30d) so the view is never empty; new users
-  default to a 7-day lookback so the watchlist is useful on first open.
+  checked" is a single, human-sized concept; the watermark advances only on an
+  explicit "mark as seen". If nothing changed since it, the attention list is
+  empty — the honest result, not a padded one.
 
 ---
 
@@ -136,7 +137,7 @@ Browser (React) ── /api ──▶ App server (Next.js)
 | Persistence | Postgres (server-side) | `localStorage` | the brief demands cross-device — client storage fails it instantly |
 | Snapshots | append-only | mutate-in-place | required for correct deltas; kills races |
 | "Meaningful" | volatility-relative + multi-signal | fixed % threshold | a fixed % mis-scores both stable and volatile stocks |
-| Watermark | one per user + Since selector | per-symbol watermarks | matches the "since I last checked" mental model without noise |
+| Watermark | one per user | per-symbol watermarks / lookback selector | faithful to "since I last checked"; no per-row noise, no scope creep |
 | Data | real API + mock fallback | mock only / real only | real makes staleness genuine; fallback keeps it resilient |
 
 ## Deliberately out of scope

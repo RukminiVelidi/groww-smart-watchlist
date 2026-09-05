@@ -20,9 +20,8 @@ const api = {
       body: JSON.stringify({ handle }),
     })).json();
   },
-  async dashboard(sinceHours?: number): Promise<Dashboard> {
-    const qs = sinceHours != null ? `?since=${sinceHours}` : "";
-    return (await fetch(`/api/watchlist${qs}`)).json();
+  async dashboard(): Promise<Dashboard> {
+    return (await fetch("/api/watchlist")).json();
   },
   async add(symbol: string) {
     return (await fetch("/api/watchlist", { method: "POST", body: JSON.stringify({ symbol }) })).json();
@@ -49,19 +48,10 @@ export default function Home() {
   const [symbol, setSymbol] = useState("");
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(false);
-  // Lookback window for "what changed". Default 1 week so the screen is never
-  // empty; "Last checked" uses the user's real watermark.
-  const [since, setSince] = useState<number | undefined>(168);
-
   const refresh = useCallback(async () => {
-    const d = await api.dashboard(since);
+    const d = await api.dashboard();
     if (!("error" in d)) setDash(d as Dashboard);
-  }, [since]);
-
-  // Re-pull when the lookback window changes.
-  useEffect(() => {
-    if (handle) refresh();
-  }, [since, handle, refresh]);
+  }, []);
 
   useEffect(() => {
     api.session().then((s) => {
@@ -143,25 +133,12 @@ export default function Home() {
               {dash && ` · last checked ${timeAgo(dash.lastSeenAt)}`}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <select
-              value={since ?? "seen"}
-              onChange={(e) => setSince(e.target.value === "seen" ? undefined : Number(e.target.value))}
-              className="text-sm border border-slate-300 rounded-lg px-2 py-2 bg-white"
-              title="Show what changed over this window"
-            >
-              <option value="seen">Since last checked</option>
-              <option value={24}>Last 24 hours</option>
-              <option value={168}>Last 7 days</option>
-              <option value={720}>Last 30 days</option>
-            </select>
-            <button
-              onClick={async () => { await api.seen(); refresh(); }}
-              className="text-sm bg-slate-900 text-white rounded-lg px-3 py-2 hover:bg-slate-700"
-            >
-              Mark all as seen
-            </button>
-          </div>
+          <button
+            onClick={async () => { await api.seen(); refresh(); }}
+            className="text-sm bg-slate-900 text-white rounded-lg px-3 py-2 hover:bg-slate-700"
+          >
+            Mark all as seen
+          </button>
         </header>
 
 
