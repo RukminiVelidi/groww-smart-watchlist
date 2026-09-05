@@ -42,6 +42,15 @@ function tokens(s: string): string[] {
 export async function resolveToNseSymbol(query: string): Promise<string | null> {
   const q = query.trim();
   if (!q) return null;
+
+  // Ticker-first: if the input is a single token that trades on NSE as-is, use
+  // it directly. Fixes short tickers Yahoo's search mishandles (e.g. "ITC") and
+  // makes any typed ticker or single-word name resolve instantly.
+  const asTicker = q.toUpperCase();
+  if (/^[A-Z][A-Z0-9&-]{0,14}$/.test(asTicker) && (await validatesOnNse(asTicker))) {
+    return asTicker;
+  }
+
   const url = `${SEARCH}?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0`;
 
   try {
