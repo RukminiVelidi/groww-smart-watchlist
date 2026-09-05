@@ -116,6 +116,17 @@ export async function resolveToNseSymbol(query: string): Promise<string | null> 
       if (!bestGlobal || sc > bestGlobal.score) bestGlobal = { sym, score: sc };
     }
     if (bestGlobal && (await validatesOnNse(bestGlobal.sym))) return bestGlobal.sym;
+
+    // 4) Groww labels ETFs/funds as "AMC-SCHEME" (e.g. "TATAAML-TATAGOLD").
+    //    If nothing matched, try the segment after/before the hyphen as a ticker
+    //    and accept it only if it validates on NSE (-> TATAGOLD). Real hyphenated
+    //    tickers like HCL-INSYS already resolve via the ticker-first step above.
+    if (asTicker.includes("-")) {
+      const parts = asTicker.split("-");
+      for (const p of [parts[parts.length - 1], parts[0]]) {
+        if (/^[A-Z][A-Z0-9&]{1,14}$/.test(p) && (await validatesOnNse(p))) return p;
+      }
+    }
     return null;
   } catch {
     return null;
