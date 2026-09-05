@@ -164,7 +164,6 @@ export default function Home() {
           </div>
         </header>
 
-        <BrokerPanel onAfter={refresh} />
         <ImportBox onAfter={refresh} />
 
         <div className="mt-4 flex gap-2">
@@ -206,8 +205,6 @@ export default function Home() {
             )}
           </>
         )}
-
-        <DemoStrip onAfter={refresh} />
       </div>
     </main>
   );
@@ -352,137 +349,3 @@ function ImportBox({ onAfter }: { onAfter: () => void }) {
   );
 }
 
-type BrokerMeta = { id: string; label: string; help: string; fields: { key: string; label: string; placeholder?: string }[] };
-
-// "Connect broker" — provider-agnostic. Imports the user's REAL holdings via the
-// broker's own token, then offers one-click re-sync so new investments appear.
-function BrokerPanel({ onAfter }: { onAfter: () => void }) {
-  const [catalog, setCatalog] = useState<BrokerMeta[]>([]);
-  const [status, setStatus] = useState<{ broker: string; lastSyncAt: string | null } | null>(null);
-  const [open, setOpen] = useState(false);
-  const [brokerId, setBrokerId] = useState("");
-  const [creds, setCreds] = useState<Record<string, string>>({});
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    const d = await (await fetch("/api/broker")).json();
-    setCatalog(d.catalog ?? []);
-    setStatus(d.status ?? null);
-    if (!brokerId && d.catalog?.[0]) setBrokerId(d.catalog[0].id);
-  }, [brokerId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  const selected = catalog.find((b) => b.id === brokerId);
-
-  async function connect() {
-    setBusy(true);
-    setMsg(null);
-    const r = await (await fetch("/api/broker", {
-      method: "POST",
-      body: JSON.stringify({ action: "connect", broker: brokerId, creds }),
-    })).json();
-    setBusy(false);
-    if (r.error) return setMsg(r.error);
-    setStatus(r.status);
-    setOpen(false);
-    setCreds({});
-    setMsg(`Imported ${r.imported} holding${r.imported === 1 ? "" : "s"}.`);
-    onAfter();
-  }
-
-  async function act(action: "sync" | "disconnect") {
-    setBusy(true);
-    setMsg(null);
-    const r = await (await fetch("/api/broker", { method: "POST", body: JSON.stringify({ action }) })).json();
-    setBusy(false);
-    if (r.error) return setMsg(r.error);
-    setStatus(r.status);
-    if (action === "sync") setMsg(`Synced — ${r.imported} holding${r.imported === 1 ? "" : "s"}.`);
-    onAfter();
-  }
-
-  if (status) {
-    const label = catalog.find((b) => b.id === status.broker)?.label ?? status.broker;
-    return (
-      <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 flex items-center justify-between text-sm">
-        <span>🔗 Connected to <span className="font-medium">{label}</span>{status.lastSyncAt && ` · synced ${timeAgo(status.lastSyncAt)}`}</span>
-        <span className="flex gap-3">
-          <button disabled={busy} onClick={() => act("sync")} className="text-emerald-700 font-medium hover:underline disabled:opacity-50">Re-sync</button>
-          <button disabled={busy} onClick={() => act("disconnect")} className="text-slate-400 hover:text-rose-600">Disconnect</button>
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="mt-4">
-      {!open ? (
-        <button onClick={() => setOpen(true)} className="w-full rounded-xl border border-dashed border-slate-300 py-3 text-sm text-slate-600 hover:border-emerald-400 hover:text-emerald-700">
-          🔗 Connect your broker to auto-import your holdings
-        </button>
-      ) : (
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-medium text-sm">Connect broker</h3>
-            <button onClick={() => setOpen(false)} className="text-slate-400 text-sm">close</button>
-          </div>
-          <select value={brokerId} onChange={(e) => { setBrokerId(e.target.value); setCreds({}); }} className="mt-3 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-            {catalog.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
-          </select>
-          {selected && <p className="text-xs text-slate-500 mt-2">{selected.help}</p>}
-          {selected?.fields.map((f) => (
-            <input
-              key={f.key}
-              className="mt-2 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-              placeholder={f.label + (f.placeholder ? ` (${f.placeholder})` : "")}
-              value={creds[f.key] ?? ""}
-              onChange={(e) => setCreds((c) => ({ ...c, [f.key]: e.target.value }))}
-            />
-          ))}
-          <button disabled={busy} onClick={connect} className="mt-3 w-full bg-emerald-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
-            {busy ? "Importing…" : "Connect & import holdings"}
-          </button>
-          <p className="text-[11px] text-slate-400 mt-2">Your token is used only to fetch holdings. Authenticate via your broker&apos;s official API — we never ask for your broker password.</p>
-        </div>
-      )}
-      {msg && <p className="text-xs text-slate-500 mt-2">{msg}</p>}
-    </div>
-  );
-}
-
-// Collapsible demo controls — honest aids that reveal REAL data (no fabricated
-// prices or events). "Rewind" moves your last-checked point back so the real
-// moves and real news since then surface; "make stale" ages a real quote to
-// show the delayed badge.
-function DemoStrip({ onAfter }: { onAfter: () => void }) {
-  const [sym, setSym] = useState("RELIANCE");
-  async function call(body: object) {
-    await fetch("/api/demo", { method: "POST", body: JSON.stringify(body) });
-    setTimeout(onAfter, 300);
-  }
-  return (
-    <details className="mt-10 text-sm text-slate-500">
-      <summary className="cursor-pointer">Demo controls (reveal real data)</summary>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button className="border rounded px-2 py-1" onClick={() => call({ action: "rewind", hours: 24 })}>
-          rewind last-checked 1 day
-        </button>
-        <button className="border rounded px-2 py-1" onClick={() => call({ action: "rewind", hours: 168 })}>
-          rewind 1 week
-        </button>
-        <span className="mx-1 text-slate-300">|</span>
-        <input value={sym} onChange={(e) => setSym(e.target.value.toUpperCase())} className="border border-slate-300 rounded px-2 py-1 w-32" />
-        <button className="border rounded px-2 py-1" onClick={() => call({ action: "stale", symbol: sym, ageMinutes: 30 })}>
-          make stale
-        </button>
-        <button className="border rounded px-2 py-1" onClick={() => fetch("/api/poll").then(() => setTimeout(onAfter, 300))}>
-          run poller
-        </button>
-      </div>
-    </details>
-  );
-}
