@@ -4,6 +4,7 @@
 // data without touching the change engine or UI.
 export type Quote = {
   symbol: string;
+  name: string | null; // real company name from the data vendor
   price: number;
   prevClose: number;
   dayChangePct: number;

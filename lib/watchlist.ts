@@ -1,9 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import { getQuotes } from "@/lib/market/adapter";
+import { fetchNews } from "@/lib/market/news";
 import { scoreSymbol } from "@/lib/change-engine";
 import type { Quote, SymbolChange } from "@/lib/types";
 
 const TTL_SECONDS = Number(process.env.QUOTE_FRESHNESS_TTL_SECONDS ?? 60);
+const NEWS_TTL_MINUTES = Number(process.env.NEWS_TTL_MINUTES ?? 15);
 
 // --- Identity ---------------------------------------------------------------
 export async function getOrCreateUser(handle: string) {
@@ -65,7 +67,47 @@ export async function refreshSnapshots(symbols: string[]): Promise<Quote[]> {
       source: q.source,
     })),
   });
+
+  // Real news refresh runs alongside the price poll but is throttled per symbol
+  // (news moves far slower than price) and parallelized so it fits within
+  // serverless time limits. Best-effort: a news failure never blocks prices.
+  await Promise.allSettled(quotes.map((q) => refreshNewsForSymbol(q)));
   return quotes;
+}
+
+async function refreshNewsForSymbol(q: Quote): Promise<void> {
+  const now = Date.now();
+  const meta = await prisma.symbolMeta.upsert({
+    where: { symbol: q.symbol },
+    update: { name: q.name ?? undefined },
+    create: { symbol: q.symbol, name: q.name },
+  });
+  // Skip if we fetched news for this symbol within the throttle window.
+  if (meta.lastNewsAt && now - meta.lastNewsAt.getTime() < NEWS_TTL_MINUTES * 60_000) {
+    return;
+  }
+  try {
+    const items = await fetchNews(q.name || q.symbol);
+    for (const it of items) {
+      await prisma.newsItem.upsert({
+        where: { symbol_url: { symbol: q.symbol, url: it.url } },
+        update: {}, // immutable once seen — dedupe on repeated polls
+        create: {
+          symbol: q.symbol,
+          title: it.title,
+          url: it.url,
+          source: it.source,
+          publishedAt: it.publishedAt,
+        },
+      });
+    }
+    await prisma.symbolMeta.update({
+      where: { symbol: q.symbol },
+      data: { lastNewsAt: new Date() },
+    });
+  } catch {
+    // news is best-effort; prices are already persisted
+  }
 }
 
 // Latest snapshot per symbol, plus staleness derived at READ time (we never
@@ -110,6 +152,10 @@ export async function buildDashboard(userId: string): Promise<Dashboard> {
   const now = Date.now();
 
   const latest = await latestSnapshots(symbols);
+  const metas = await prisma.symbolMeta.findMany({
+    where: { symbol: { in: symbols } },
+  });
+  const nameBySymbol = new Map(metas.map((m) => [m.symbol, m.name]));
   const staleness: Dashboard["staleness"] = {};
   const scored: SymbolChange[] = [];
 
@@ -142,13 +188,16 @@ export async function buildDashboard(userId: string): Promise<Dashboard> {
       select: { price: true },
     });
 
-    const events = await prisma.corporateEvent.findMany({
-      where: { symbol, occurredAt: { gt: lastSeenAt, lte: new Date() } },
-      orderBy: { occurredAt: "desc" },
+    // Meaningful events = real news published since the user last checked.
+    const news = await prisma.newsItem.findMany({
+      where: { symbol, publishedAt: { gt: lastSeenAt, lte: new Date() } },
+      orderBy: { publishedAt: "desc" },
+      take: 3,
     });
 
     const quote: Quote = {
       symbol: snap.symbol,
+      name: nameBySymbol.get(snap.symbol) ?? null,
       price: snap.price,
       prevClose: snap.prevClose,
       dayChangePct: snap.dayChangePct,
@@ -170,7 +219,7 @@ export async function buildDashboard(userId: string): Promise<Dashboard> {
         quote,
         baselinePrice: baseline?.price ?? null,
         dailyReturns: await dailyReturns(symbol),
-        events: events.map((e) => ({ type: e.type, headline: e.headline })),
+        events: news.map((n) => ({ type: "NEWS", headline: `${n.title}` })),
       })
     );
   }

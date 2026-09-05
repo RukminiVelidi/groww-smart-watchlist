@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { currentUserId } from "@/lib/session";
 import { addSymbol, removeSymbol, buildDashboard } from "@/lib/watchlist";
 
+// Adding a symbol warms its quote + first news fetch, which can exceed the
+// default serverless cap.
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
 async function requireUser() {
   const userId = await currentUserId();
   if (!userId) return null;

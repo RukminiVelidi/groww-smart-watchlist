@@ -62,9 +62,15 @@ async function fetchOneFromYahoo(symbol: string): Promise<Quote | null> {
 
   return {
     symbol,
+    name:
+      (typeof meta.longName === "string" && meta.longName) ||
+      (typeof meta.shortName === "string" && meta.shortName) ||
+      null,
     price,
     prevClose,
-    dayChangePct: ((price - prevClose) / prevClose) * 100,
+    dayChangePct:
+      toNum(meta.regularMarketChangePercent) ??
+      ((price - prevClose) / prevClose) * 100,
     dayHigh: toNum(meta.regularMarketDayHigh),
     dayLow: toNum(meta.regularMarketDayLow),
     volume: toNum(meta.regularMarketVolume),
@@ -106,6 +112,7 @@ function mockQuote(symbol: string): Quote {
   const avgVolume = 1_000_000 + (seed % 5) * 500_000;
   return {
     symbol,
+    name: symbol,
     price,
     prevClose,
     dayChangePct: +dayChangePct.toFixed(2),

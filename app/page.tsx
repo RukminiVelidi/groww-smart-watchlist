@@ -256,7 +256,10 @@ function ChangeCard({
   );
 }
 
-// Collapsible demo controls — visible aid for the live 5-min demo.
+// Collapsible demo controls — honest aids that reveal REAL data (no fabricated
+// prices or events). "Rewind" moves your last-checked point back so the real
+// moves and real news since then surface; "make stale" ages a real quote to
+// show the delayed badge.
 function DemoStrip({ onAfter }: { onAfter: () => void }) {
   const [sym, setSym] = useState("RELIANCE");
   async function call(body: object) {
@@ -265,15 +268,16 @@ function DemoStrip({ onAfter }: { onAfter: () => void }) {
   }
   return (
     <details className="mt-10 text-sm text-slate-500">
-      <summary className="cursor-pointer">Demo controls</summary>
+      <summary className="cursor-pointer">Demo controls (reveal real data)</summary>
       <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button className="border rounded px-2 py-1" onClick={() => call({ action: "rewind", hours: 24 })}>
+          rewind last-checked 1 day
+        </button>
+        <button className="border rounded px-2 py-1" onClick={() => call({ action: "rewind", hours: 168 })}>
+          rewind 1 week
+        </button>
+        <span className="mx-1 text-slate-300">|</span>
         <input value={sym} onChange={(e) => setSym(e.target.value.toUpperCase())} className="border border-slate-300 rounded px-2 py-1 w-32" />
-        <button className="border rounded px-2 py-1" onClick={() => call({ action: "spike", symbol: sym, changePct: 6, volumeMult: 3 })}>
-          +6% on 3× vol
-        </button>
-        <button className="border rounded px-2 py-1" onClick={() => call({ action: "event", symbol: sym })}>
-          post result event
-        </button>
         <button className="border rounded px-2 py-1" onClick={() => call({ action: "stale", symbol: sym, ageMinutes: 30 })}>
           make stale
         </button>

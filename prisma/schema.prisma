@@ -63,15 +63,28 @@ model Snapshot {
   @@index([symbol, fetchedAt])
 }
 
-// Scheduled fundamental events are inherently high-attention. An event is
-// "meaningful" if it occurred between the user's lastSeenAt and now.
-model CorporateEvent {
+// Real news, fetched from Google News RSS (queried by the company's real name).
+// A news item is "meaningful" if it was published between the user's lastSeenAt
+// and now. Deduped by (symbol, url) so repeated polls never double-count.
+model NewsItem {
   id          String   @id @default(cuid())
   symbol      String
-  type        String // RESULT | DIVIDEND | BONUS | BUYBACK
-  headline    String
-  occurredAt  DateTime
+  title       String
+  url         String
+  source      String
+  publishedAt DateTime
   createdAt   DateTime @default(now())
 
-  @@index([symbol, occurredAt])
+  @@unique([symbol, url])
+  @@index([symbol, publishedAt])
+}
+
+// Per-symbol cache: the real company name (from Yahoo) used for the news query,
+// and a throttle timestamp so we fetch news at most every NEWS_TTL, decoupled
+// from the faster price poll.
+model SymbolMeta {
+  symbol     String    @id
+  name       String?
+  lastNewsAt DateTime?
+  updatedAt  DateTime  @updatedAt
 }

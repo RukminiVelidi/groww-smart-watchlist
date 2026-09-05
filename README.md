@@ -46,7 +46,7 @@ large-cap and pure noise for a volatile small-cap. Every change is scored
 | **Volume** | today's volume vs its 3-month average | A volume spike is conviction: *something happened* |
 | **Breakout** | crossed/near its 52-week high or low | A discrete technical event traders act on |
 | **Circuit** | locked in upper/lower circuit | A hard, unambiguous extreme-move signal |
-| **Event** | a result/dividend/bonus posted *since your last visit* | Scheduled, fundamental, high-attention |
+| **News** | a real news headline published *since your last visit* | Fresh news is the clearest "something happened" |
 
 Signals combine via **weighted noisy-OR**: each is independent evidence that
 "something happened", so multiple moderate signals compound (correctly ranking
@@ -58,6 +58,19 @@ have ≥3 days of history; before that we fall back to a **market-cap-based prio
 (size strongly predicts volatility) — a principled prior, not a magic number.
 
 ---
+
+## Data sources — all real, nothing seeded
+
+| Data | Source | Key? |
+|---|---|---|
+| Price, day change, day high/low, volume, 52-week range, company name | Yahoo Finance **`v8/chart`** (crumb-free) | none |
+| Average-volume baseline (for the volume signal) | derived from Yahoo's 3-month daily series | none |
+| News (the "meaningful event" signal) | **Google News RSS**, queried by the real company name, deduped, throttled per symbol | none |
+
+The same free sources that paid apps replace with licensed feeds (Groww uses
+Refinitiv for fundamentals and exchange feeds for prices/announcements). If a
+source is unreachable, the price path degrades to a clearly-labelled `mock`
+quote and the news path simply yields no events — the app never fabricates data.
 
 ## Architecture
 
@@ -142,8 +155,9 @@ add each turns every omission into a judgement call, not a gap.
 
 ```
 lib/change-engine.ts   the "meaningful change" scoring (pure, unit-testable)
-lib/market/adapter.ts  data source: Yahoo + mock fallback, staleness/provenance
-lib/watchlist.ts       service layer: snapshots, dashboard, watermark
+lib/market/adapter.ts  prices: Yahoo v8/chart + mock fallback, staleness/provenance
+lib/market/news.ts     news: Google News RSS reader (dependency-free parser)
+lib/watchlist.ts       service layer: snapshots, news refresh, dashboard, watermark
 prisma/schema.prisma   data model (doubles as documentation)
 app/api/*              watchlist CRUD · seen · poll (cron) · demo controls
 app/page.tsx           UI: ranked "needs attention" + quiet + staleness badges

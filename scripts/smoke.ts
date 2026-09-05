@@ -5,6 +5,7 @@ import type { Quote } from "@/lib/types";
 function base(overrides: Partial<Quote>): Quote {
   return {
     symbol: "TEST",
+    name: "Test Ltd",
     price: 100,
     prevClose: 100,
     dayChangePct: 0,

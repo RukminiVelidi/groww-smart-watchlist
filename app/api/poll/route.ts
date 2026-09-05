@@ -4,6 +4,8 @@ import { refreshSnapshots } from "@/lib/watchlist";
 
 // Touches the DB and must never be prerendered at build time.
 export const dynamic = "force-dynamic";
+// Price + throttled news fetch can take longer than the default serverless cap.
+export const maxDuration = 60;
 
 // The poller. Runs on a schedule (Vercel Cron). Fetches every UNIQUE symbol
 // once — shared across all users — plus a seed set so the demo always has data.
