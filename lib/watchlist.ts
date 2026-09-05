@@ -13,7 +13,12 @@ export async function getOrCreateUser(handle: string) {
   return prisma.user.upsert({
     where: { handle: clean },
     update: {},
-    create: { handle: clean },
+    // First-time users have no prior visit, so anchor "since you last checked"
+    // to a week ago — the watchlist is immediately useful instead of empty.
+    create: {
+      handle: clean,
+      lastSeenAt: new Date(Date.now() - 7 * 24 * 3600 * 1000),
+    },
   });
 }
 
@@ -165,11 +170,18 @@ export type Dashboard = {
   staleness: Record<string, { stale: boolean; ageSeconds: number; source: string }>;
 };
 
-export async function buildDashboard(userId: string): Promise<Dashboard> {
+export async function buildDashboard(
+  userId: string,
+  sinceHours?: number
+): Promise<Dashboard> {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   const symbols = await getSymbols(userId);
-  const lastSeenAt = user.lastSeenAt;
   const now = Date.now();
+  // The anchor for "what changed": either an explicit lookback window the user
+  // picked ("today", "this week") or their actual last-checked watermark.
+  const anchor =
+    sinceHours != null ? new Date(now - sinceHours * 3600 * 1000) : user.lastSeenAt;
+  const lastSeenAt = anchor;
 
   const latest = await latestSnapshots(symbols);
   const metas = await prisma.symbolMeta.findMany({
