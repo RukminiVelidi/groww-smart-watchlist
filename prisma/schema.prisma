@@ -25,7 +25,6 @@ model User {
   lastSeenAt DateTime        @default(now())
   createdAt  DateTime        @default(now())
   items      WatchlistItem[]
-  broker     BrokerConnection?
 }
 
 model WatchlistItem {
@@ -78,23 +77,6 @@ model NewsItem {
 
   @@unique([symbol, url])
   @@index([symbol, publishedAt])
-}
-
-// A user's link to their broker. Stores the access token so we can re-sync
-// holdings on a schedule (new investments appear automatically). One per user.
-//
-// NOTE: for the hackathon the token is stored as-is. In production this MUST be
-// encrypted at rest (KMS/envelope encryption) and use short-lived refresh
-// tokens — called out in the README as a known trade-off.
-model BrokerConnection {
-  id          String    @id @default(cuid())
-  userId      String    @unique
-  broker      String // "dhan" | "groww" | ...
-  accessToken String
-  clientId    String?
-  lastSyncAt  DateTime?
-  createdAt   DateTime  @default(now())
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // Per-symbol cache: the real company name (from Yahoo) used for the news query,

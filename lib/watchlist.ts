@@ -34,26 +34,6 @@ export async function addSymbol(userId: string, symbol: string) {
   await refreshSnapshots([s]);
 }
 
-// Bulk add (e.g. broker import) — upsert all rows, then warm quotes+news ONCE
-// instead of once per symbol.
-export async function addSymbols(userId: string, symbols: string[]) {
-  const clean = [...new Set(symbols.map((s) => s.trim().toUpperCase()))].filter(
-    Boolean
-  );
-  if (clean.length === 0) return [];
-  await prisma.$transaction(
-    clean.map((symbol) =>
-      prisma.watchlistItem.upsert({
-        where: { userId_symbol: { userId, symbol } },
-        update: {},
-        create: { userId, symbol },
-      })
-    )
-  );
-  await refreshSnapshots(clean);
-  return clean;
-}
-
 export async function removeSymbol(userId: string, symbol: string) {
   await prisma.watchlistItem.deleteMany({
     where: { userId, symbol: symbol.trim().toUpperCase() },
