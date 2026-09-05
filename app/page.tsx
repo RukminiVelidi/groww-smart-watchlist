@@ -142,6 +142,7 @@ export default function Home() {
         </header>
 
         <BrokerPanel onAfter={refresh} />
+        <ImportBox onAfter={refresh} />
 
         <div className="mt-4 flex gap-2">
           <input
@@ -254,6 +255,66 @@ function ChangeCard({
           remove
         </button>
       </div>
+    </div>
+  );
+}
+
+// Import holdings from a broker CSV export or a pasted list of names/symbols.
+// Works today with no broker API — e.g. a friend's Groww holdings export.
+function ImportBox({ onAfter }: { onAfter: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function submit() {
+    if (!text.trim()) return;
+    setBusy(true);
+    setMsg(null);
+    const r = await (await fetch("/api/import", { method: "POST", body: JSON.stringify({ text }) })).json();
+    setBusy(false);
+    if (r.error) return setMsg(r.error);
+    const parts = [`Imported ${r.imported} stock${r.imported === 1 ? "" : "s"}.`];
+    if (r.unresolved?.length) parts.push(`Couldn't match: ${r.unresolved.slice(0, 8).join(", ")}${r.unresolved.length > 8 ? "…" : ""}`);
+    setMsg(parts.join(" "));
+    setText("");
+    onAfter();
+  }
+
+  return (
+    <div className="mt-2">
+      {!open ? (
+        <button onClick={() => setOpen(true)} className="text-xs text-slate-500 hover:text-emerald-700">
+          or import from a file / paste holdings →
+        </button>
+      ) : (
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-medium text-sm">Import holdings</h3>
+            <button onClick={() => setOpen(false)} className="text-slate-400 text-sm">close</button>
+          </div>
+          <p className="text-xs text-slate-500 mt-1">Upload a broker CSV export, or paste stock names/symbols (one per line or comma-separated). We match names to NSE symbols automatically.</p>
+          <input
+            type="file"
+            accept=".csv,text/csv,text/plain"
+            className="mt-3 block text-xs"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (f) setText(await f.text());
+            }}
+          />
+          <textarea
+            className="mt-2 w-full h-24 border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            placeholder={"Reliance Industries\nTCS\nHDFC Bank\nInfosys"}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <button disabled={busy} onClick={submit} className="mt-2 w-full bg-slate-900 text-white rounded-lg py-2 text-sm font-medium hover:bg-slate-700 disabled:opacity-50">
+            {busy ? "Importing…" : "Import"}
+          </button>
+        </div>
+      )}
+      {msg && <p className="text-xs text-slate-500 mt-2">{msg}</p>}
     </div>
   );
 }
