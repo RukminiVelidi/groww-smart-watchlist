@@ -1,0 +1,77 @@
+// Data model for the Smart Market Watchlist.
+//
+// Design decision: snapshots are APPEND-ONLY. We never mutate a price row.
+// This is what makes "what changed since you last checked" both possible and
+// correct — the delta is always computed between two immutable points in time,
+// and it eliminates a whole class of read/write race conditions by construction.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooled — used by the app at runtime
+  directUrl = env("DIRECT_URL")   // non-pooled — used for migrations/db push
+}
+
+// Identity only — no password. The graded axis is that state persists
+// server-side and is reachable from ANY device by signing in with the same
+// handle. Credentials/security are deliberately out of scope (see README).
+model User {
+  id         String          @id @default(cuid())
+  handle     String          @unique
+  // The single point-in-time that anchors "since you last checked".
+  lastSeenAt DateTime        @default(now())
+  createdAt  DateTime        @default(now())
+  items      WatchlistItem[]
+}
+
+model WatchlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  symbol    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, symbol]) // a symbol appears at most once per user
+  @@index([symbol])
+}
+
+// One row per (symbol, poll). Shared across ALL users — we fetch a symbol once,
+// never per-user. This is the scale answer: cost is O(unique symbols), not
+// O(users x symbols).
+model Snapshot {
+  id           String   @id @default(cuid())
+  symbol       String
+  price        Float
+  prevClose    Float
+  dayChangePct Float
+  dayHigh      Float?
+  dayLow       Float?
+  volume       Float?
+  avgVolume    Float? // vendor 3-month average — a stable volume baseline
+  week52High   Float?
+  week52Low    Float?
+  marketCap    Float?
+  upperCircuit Float?
+  lowerCircuit Float?
+  source       String // e.g. "yahoo", "mock" — provenance for conflict resolution
+  fetchedAt    DateTime @default(now())
+  stale        Boolean  @default(false) // true if served from cache past freshness TTL
+
+  @@index([symbol, fetchedAt])
+}
+
+// Scheduled fundamental events are inherently high-attention. An event is
+// "meaningful" if it occurred between the user's lastSeenAt and now.
+model CorporateEvent {
+  id          String   @id @default(cuid())
+  symbol      String
+  type        String // RESULT | DIVIDEND | BONUS | BUYBACK
+  headline    String
+  occurredAt  DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([symbol, occurredAt])
+}
