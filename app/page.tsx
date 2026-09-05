@@ -296,11 +296,21 @@ function ImportBox({ onAfter }: { onAfter: () => void }) {
           <p className="text-xs text-slate-500 mt-1">Upload a broker CSV export, or paste stock names/symbols (one per line or comma-separated). We match names to NSE symbols automatically.</p>
           <input
             type="file"
-            accept=".csv,text/csv,text/plain"
+            accept=".csv,.xlsx,.xls,text/csv,text/plain"
             className="mt-3 block text-xs"
             onChange={async (e) => {
               const f = e.target.files?.[0];
-              if (f) setText(await f.text());
+              if (!f) return;
+              if (/\.(xlsx|xls)$/i.test(f.name)) {
+                // Excel exports (e.g. Groww) — convert the first sheet to CSV in
+                // the browser. Dynamic import keeps the parser out of the main bundle.
+                const XLSX = await import("xlsx");
+                const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+                const ws = wb.Sheets[wb.SheetNames[0]];
+                setText(XLSX.utils.sheet_to_csv(ws));
+              } else {
+                setText(await f.text());
+              }
             }}
           />
           <textarea

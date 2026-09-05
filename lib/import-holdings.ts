@@ -24,11 +24,12 @@ function parseLine(line: string): string[] {
   return out;
 }
 
-const HEADER_HINT = /company|stock|name|instrument|symbol|ticker|scrip|isin|security/i;
+const HEADER_HINT = /stock name|company|instrument|scrip|security|symbol|ticker|isin/i;
 const SYMBOL_COL = /symbol|ticker|scrip/i;
-const NAME_COL = /company|stock name|instrument|security|name/i;
+const NAME_COL = /stock name|company|instrument|security|name/i;
 const ISIN_COL = /isin/i;
-const SKIP = /^(total|grand total|holdings|portfolio)?$/i;
+const SKIP = /^(total|grand total|holdings|portfolio|summary)?$/i;
+const NUMERIC = /^[₹$]?[\d,]+(\.\d+)?%?$/; // pure numbers/amounts aren't stock names
 
 export function extractCandidates(text: string): string[] {
   const lines = text
@@ -37,37 +38,39 @@ export function extractCandidates(text: string): string[] {
     .filter(Boolean);
   if (lines.length === 0) return [];
 
-  const looksCsv = lines[0].includes(",");
+  const looksCsv = lines.some((l) => l.includes(","));
   if (!looksCsv) {
     // Plain list: one symbol/name per line (or comma separated on one line).
-    return dedupeCap(
-      lines
-        .flatMap((l) => l.split(","))
-        .map((s) => s.trim())
-        .filter((s) => s && !SKIP.test(s))
-    );
+    return dedupeCap(cleanValues(lines.flatMap((l) => l.split(","))));
   }
 
   const rows = lines.map(parseLine);
-  const header = rows[0];
-  const hasHeader = header.some((h) => HEADER_HINT.test(h));
 
-  let col = 0;
-  let dataRows = rows;
-  if (hasHeader) {
+  // Broker exports (Groww etc.) put metadata rows ABOVE the real header, so we
+  // find the header row anywhere — the first multi-column row that names a
+  // stock/symbol/ISIN column — rather than assuming it's row 0.
+  const headerIdx = rows.findIndex(
+    (r) => r.length >= 2 && r.some((c) => HEADER_HINT.test(c))
+  );
+
+  if (headerIdx >= 0) {
+    const header = rows[headerIdx];
     const find = (re: RegExp) => header.findIndex((h) => re.test(h));
-    col = find(SYMBOL_COL);
+    let col = find(SYMBOL_COL);
     if (col < 0) col = find(NAME_COL);
     if (col < 0) col = find(ISIN_COL);
     if (col < 0) col = 0;
-    dataRows = rows.slice(1);
+    return dedupeCap(cleanValues(rows.slice(headerIdx + 1).map((r) => r[col] ?? "")));
   }
 
-  return dedupeCap(
-    dataRows
-      .map((r) => (r[col] ?? "").trim())
-      .filter((v) => v && !SKIP.test(v))
-  );
+  // No header found — take the first column of each row.
+  return dedupeCap(cleanValues(rows.map((r) => r[0] ?? "")));
+}
+
+function cleanValues(vals: string[]): string[] {
+  return vals
+    .map((s) => s.trim())
+    .filter((s) => s && !SKIP.test(s) && !NUMERIC.test(s));
 }
 
 function dedupeCap(arr: string[], cap = 100): string[] {
