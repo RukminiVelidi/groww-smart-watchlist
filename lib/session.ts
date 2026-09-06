@@ -31,20 +31,26 @@ export function currentHandle(): string | null {
   return cookies().get(COOKIE)?.value ?? null;
 }
 
-// Sign in with handle + PIN.
-//  - New handle  -> creates the account and sets this PIN.
-//  - Existing handle with a PIN -> the PIN must match, else rejected.
-//  - Existing handle with no PIN yet -> adopts the PIN entered.
+// Sign in / sign up with handle + PIN, with an explicit mode so the UI can give
+// clear feedback:
+//  - signup: handle must be free; creates the account and sets the PIN.
+//  - signin: handle must exist; PIN must match (a legacy handle with no PIN yet
+//            adopts the one entered).
 export async function signIn(
   handle: string,
-  pin: string
+  pin: string,
+  mode: "signin" | "signup"
 ): Promise<{ ok: boolean; error?: string }> {
   const clean = handle.trim().toLowerCase();
   if (!clean) return { ok: false, error: "Enter a handle." };
   if (!/^\d{4,6}$/.test(pin)) return { ok: false, error: "PIN must be 4–6 digits." };
 
   const existing = await prisma.user.findUnique({ where: { handle: clean } });
-  if (!existing) {
+
+  if (mode === "signup") {
+    if (existing) {
+      return { ok: false, error: `"${clean}" is already taken — choose a different handle.` };
+    }
     await prisma.user.create({
       data: {
         handle: clean,
@@ -52,13 +58,15 @@ export async function signIn(
         lastSeenAt: new Date(Date.now() - 24 * 3600 * 1000),
       },
     });
-  } else if (!existing.pinHash) {
-    await prisma.user.update({
-      where: { id: existing.id },
-      data: { pinHash: hashPin(pin) },
-    });
-  } else if (!verifyPin(pin, existing.pinHash)) {
-    return { ok: false, error: "Incorrect PIN for this handle." };
+  } else {
+    if (!existing) {
+      return { ok: false, error: `No account for "${clean}". Switch to Sign up to create it.` };
+    }
+    if (!existing.pinHash) {
+      await prisma.user.update({ where: { id: existing.id }, data: { pinHash: hashPin(pin) } });
+    } else if (!verifyPin(pin, existing.pinHash)) {
+      return { ok: false, error: "Incorrect PIN." };
+    }
   }
 
   cookies().set(COOKIE, clean, {

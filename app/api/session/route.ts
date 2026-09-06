@@ -7,11 +7,12 @@ export async function GET() {
 
 // Sign in / sign up with handle + PIN.
 export async function POST(req: NextRequest) {
-  const { handle, pin } = await req.json();
+  const { handle, pin, mode } = await req.json();
   if (!handle || typeof handle !== "string" || !handle.trim()) {
     return NextResponse.json({ error: "handle required" }, { status: 400 });
   }
-  const result = await signIn(handle, String(pin ?? ""));
+  const m = mode === "signup" ? "signup" : "signin";
+  const result = await signIn(handle, String(pin ?? ""), m);
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 401 });
   return NextResponse.json({ handle: handle.trim().toLowerCase() });
 }

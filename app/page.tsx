@@ -14,10 +14,10 @@ const api = {
   async session() {
     return (await fetch("/api/session")).json();
   },
-  async signIn(handle: string, pin: string) {
+  async signIn(handle: string, pin: string, mode: "signin" | "signup") {
     return (await fetch("/api/session", {
       method: "POST",
-      body: JSON.stringify({ handle, pin }),
+      body: JSON.stringify({ handle, pin, mode }),
     })).json();
   },
   async dashboard(): Promise<Dashboard> {
@@ -49,6 +49,7 @@ export default function Home() {
   const [handle, setHandle] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [pin, setPin] = useState("");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [signInError, setSignInError] = useState<string | null>(null);
   const [symbol, setSymbol] = useState("");
   const [dash, setDash] = useState<Dashboard | null>(null);
@@ -91,7 +92,7 @@ export default function Home() {
   async function doSignIn() {
     if (!input.trim()) return;
     setSignInError(null);
-    const r = await api.signIn(input, pin);
+    const r = await api.signIn(input, pin, authMode);
     if (r && "error" in r && r.error) {
       setSignInError(r.error as string);
       return;
@@ -121,13 +122,25 @@ export default function Home() {
       <main className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-900">
         <div className="w-full max-w-sm p-8 bg-white rounded-2xl shadow-sm border border-slate-200">
           <h1 className="text-xl font-bold">Smart Watchlist</h1>
-          <p className="text-sm text-slate-500 mt-1">
-            Enter a handle and a PIN. A new handle sets its PIN; returning to it
-            needs the same PIN. Same handle + PIN on another device = same
-            watchlist.
+          {/* Sign in / Sign up toggle */}
+          <div className="mt-3 grid grid-cols-2 gap-1 bg-slate-100 rounded-lg p-1 text-sm">
+            {(["signin", "signup"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => { setAuthMode(m); setSignInError(null); }}
+                className={`rounded-md py-1.5 font-medium ${authMode === m ? "bg-white shadow-sm text-slate-900" : "text-slate-500"}`}
+              >
+                {m === "signin" ? "Sign in" : "Sign up"}
+              </button>
+            ))}
+          </div>
+          <p className="text-sm text-slate-500 mt-3">
+            {authMode === "signup"
+              ? "Pick a handle and set a PIN. If the handle is taken, you'll be asked to choose another."
+              : "Enter your handle and PIN. Same handle + PIN on any device = the same watchlist."}
           </p>
           <input
-            className="mt-4 w-full border border-slate-300 rounded-lg px-3 py-2"
+            className="mt-3 w-full border border-slate-300 rounded-lg px-3 py-2"
             placeholder="handle — e.g. asha"
             value={input}
             onChange={(e) => { setInput(e.target.value); setSignInError(null); }}
@@ -137,7 +150,7 @@ export default function Home() {
             type="password"
             inputMode="numeric"
             className="mt-2 w-full border border-slate-300 rounded-lg px-3 py-2"
-            placeholder="PIN (4–6 digits)"
+            placeholder={authMode === "signup" ? "Set a PIN (4–6 digits)" : "PIN (4–6 digits)"}
             value={pin}
             onChange={(e) => { setPin(e.target.value.replace(/\D/g, "").slice(0, 6)); setSignInError(null); }}
             onKeyDown={(e) => e.key === "Enter" && doSignIn()}
@@ -147,7 +160,7 @@ export default function Home() {
             onClick={doSignIn}
             className="mt-3 w-full bg-emerald-600 text-white rounded-lg py-2 font-medium hover:bg-emerald-700"
           >
-            Continue
+            {authMode === "signup" ? "Create account" : "Sign in"}
           </button>
         </div>
       </main>
