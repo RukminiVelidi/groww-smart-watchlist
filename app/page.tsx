@@ -40,6 +40,13 @@ const api = {
   },
 };
 
+// Compact Indian-style volume formatting (Cr / L).
+function fmtVol(n: number): string {
+  if (n >= 1e7) return `${(n / 1e7).toFixed(1)} Cr`;
+  if (n >= 1e5) return `${(n / 1e5).toFixed(1)} L`;
+  return n.toLocaleString("en-IN");
+}
+
 function timeAgo(iso: string) {
   const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return `${s}s ago`;
@@ -344,6 +351,14 @@ function ChangeCard({
               </li>
             ))}
           </ul>
+        )}
+        {/* Underlying figures behind the signals — attention cards only. */}
+        {highlight && c.current && (c.current.volatilityPct || c.current.avgVolume) && (
+          <p className="text-[11px] text-slate-400 mt-1">
+            {c.current.volatilityPct ? `~${c.current.volatilityPct.toFixed(1)}%/day typical move` : ""}
+            {c.current.volatilityPct && c.current.avgVolume ? " · " : ""}
+            {c.current.avgVolume ? `avg volume ${fmtVol(c.current.avgVolume)}` : ""}
+          </p>
         )}
       </div>
       <div className="flex flex-col items-end gap-1 shrink-0">
