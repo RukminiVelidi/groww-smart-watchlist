@@ -155,7 +155,7 @@ export default function Home() {
         <div className="mt-4 flex gap-2">
           <input
             className="flex-1 border border-slate-300 rounded-lg px-3 py-2"
-            placeholder="Add NSE symbol e.g. RELIANCE, TCS, INFY"
+            placeholder="Add a stock — e.g. RELIANCE, TCS, INFY"
             value={symbol}
             onChange={(e) => { setSymbol(e.target.value); setAddError(null); }}
             onKeyDown={(e) => e.key === "Enter" && doAdd()}
@@ -177,10 +177,10 @@ export default function Home() {
           const onRemove = async (s: string) => { await api.remove(s); refresh(); };
           return (
             <>
-              <Section title="Needs your attention" subtitle="Meaningful changes since you last checked, ranked">
+              <Section title="Needs your attention" subtitle="Meaningful changes since you last checked">
                 {attention.length === 0 && (
                   <p className="text-sm text-slate-500 px-1 py-6">
-                    Nothing meaningful has changed since you last checked. Quiet is good.
+                    No meaningful changes since you last checked.
                   </p>
                 )}
                 {attention.map((c) => (
@@ -252,7 +252,7 @@ function ChangeCard({
             </span>
           )}
         </div>
-        <p className={`text-sm mt-1 ${highlight ? "text-slate-800" : "text-slate-500"}`}>{c.headline}</p>
+        {highlight && <p className="text-sm mt-1 text-slate-800">{c.headline}</p>}
         {highlight && c.signals.length > 1 && (
           <ul className="mt-2 flex flex-wrap gap-1">
             {c.signals.map((s, i) => (
