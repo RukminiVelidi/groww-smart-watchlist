@@ -219,12 +219,17 @@ export async function buildDashboard(userId: string): Promise<Dashboard> {
       select: { price: true },
     });
 
-    // Meaningful events = real news published since the global watermark.
-    const news = await prisma.newsItem.findMany({
+    // Meaningful events = real news published since the global watermark,
+    // relevance-filtered so a mis-tagged roundup can't flag a stock or become
+    // its headline (same title-verification as the news panel).
+    const rawNews = await prisma.newsItem.findMany({
       where: { symbol, publishedAt: { gt: lastSeenAt, lte: new Date() } },
       orderBy: { publishedAt: "desc" },
-      take: 3,
+      take: 10,
     });
+    const news = rawNews
+      .filter((n) => isRelevantNews(n.title, nameBySymbol.get(symbol) ?? null, symbol))
+      .slice(0, 3);
 
     const quote: Quote = {
       symbol: snap.symbol,
