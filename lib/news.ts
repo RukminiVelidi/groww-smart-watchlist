@@ -17,15 +17,11 @@ export async function getStockNews(
 ): Promise<StockNewsItem[]> {
   const sym = symbol.trim().toUpperCase();
 
-  // Recency window: news since the user's watermark, but never older than 7
-  // days. New users (watermark = 24h ago) see the last day; returning users see
-  // since they last checked; nobody sees weeks-old news.
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { lastSeenAt: true },
-  });
-  const cap = new Date(Date.now() - 7 * 24 * 3600 * 1000);
-  const since = user && user.lastSeenAt > cap ? user.lastSeenAt : cap;
+  // The browse panel shows RECENT news only — a rolling 7-day window — so it's
+  // never weeks/months old but still has content on a quiet day. (The "since
+  // you last checked" watermark logic drives the attention *alerts*, not this
+  // browse list.)
+  const since = new Date(Date.now() - 7 * 24 * 3600 * 1000);
 
   const reads = await prisma.newsRead.findMany({
     where: { userId },
