@@ -13,7 +13,9 @@ export async function getOrCreateUser(handle: string) {
   return prisma.user.upsert({
     where: { handle: clean },
     update: {},
-    create: { handle: clean },
+    // Start the global watermark 24h back so a first-time user immediately sees
+    // the last day's meaningful changes instead of an empty screen.
+    create: { handle: clean, lastSeenAt: new Date(Date.now() - 24 * 3600 * 1000) },
   });
 }
 
@@ -38,8 +40,8 @@ export async function addSymbol(
 
   await prisma.watchlistItem.upsert({
     where: { userId_symbol: { userId, symbol: s } },
-    update: {},
-    create: { userId, symbol: s },
+    update: {}, // re-adding keeps any existing seenAt
+    create: { userId, symbol: s }, // seenAt null → uses the global watermark
   });
   // Persist the quote we just validated so the symbol has data on first view.
   await refreshSnapshots([s]);
@@ -165,8 +167,8 @@ export async function buildDashboard(userId: string): Promise<Dashboard> {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   const symbols = await getSymbols(userId);
   const now = Date.now();
-  // The anchor is always the user's last-checked watermark. If nothing has
-  // changed since then, the "needs attention" list is simply empty.
+  // Single global watermark: what changed is measured since here, for every
+  // stock, regardless of whether the user read prior updates.
   const lastSeenAt = user.lastSeenAt;
 
   const latest = await latestSnapshots(symbols);
@@ -199,14 +201,14 @@ export async function buildDashboard(userId: string): Promise<Dashboard> {
       source: snap.source,
     };
 
-    // Baseline = latest snapshot at/just-before the user's lastSeenAt.
+    // Baseline = latest snapshot at/just-before the global watermark.
     const baseline = await prisma.snapshot.findFirst({
       where: { symbol, fetchedAt: { lte: lastSeenAt } },
       orderBy: { fetchedAt: "desc" },
       select: { price: true },
     });
 
-    // Meaningful events = real news published since the user last checked.
+    // Meaningful events = real news published since the global watermark.
     const news = await prisma.newsItem.findMany({
       where: { symbol, publishedAt: { gt: lastSeenAt, lte: new Date() } },
       orderBy: { publishedAt: "desc" },
@@ -245,16 +247,15 @@ export async function buildDashboard(userId: string): Promise<Dashboard> {
   // A symbol is "meaningful" if any signal fired hard enough to matter.
   const MEANINGFUL = 0.25;
   return {
-    lastSeenAt: lastSeenAt.toISOString(),
+    lastSeenAt: user.lastSeenAt.toISOString(),
     changes: scored.filter((s) => s.attentionScore >= MEANINGFUL),
     quiet: scored.filter((s) => s.attentionScore < MEANINGFUL),
     staleness,
   };
 }
 
-// Advancing the watermark is the ONLY place lastSeenAt moves, and it's an
-// explicit user action ("mark as seen"). Snapshots are append-only, so this
-// single atomic write is race-free: no background job can lose or tear it.
+// Advance the single global watermark to now (the explicit "I've checked
+// everything" reset). Atomic single write, race-free with append-only snapshots.
 export async function markSeen(userId: string) {
   await prisma.user.update({
     where: { id: userId },

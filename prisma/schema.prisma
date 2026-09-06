@@ -21,7 +21,8 @@ datasource db {
 model User {
   id         String          @id @default(cuid())
   handle     String          @unique
-  // The single point-in-time that anchors "since you last checked".
+  // Global watermark: the baseline "last checked" for the whole watchlist.
+  // New users start 24h back so the first view shows the last day's changes.
   lastSeenAt DateTime        @default(now())
   createdAt  DateTime        @default(now())
   items      WatchlistItem[]
