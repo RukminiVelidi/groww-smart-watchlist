@@ -24,10 +24,12 @@ npm run dev               # http://localhost:3000
 npm run smoke             # optional: prove the change engine with no DB/network
 ```
 
-Sign in with any handle → add NSE symbols (RELIANCE, TCS, INFY…). On return,
-the watchlist ranks what changed **since you last checked**; **Mark all as seen**
-advances that point. Sign in with the same handle on another device to get the
-identical watchlist.
+Sign up / sign in with a **handle + PIN** (a new handle sets its PIN; returning
+needs it — so two people can't share a list). **Search a company** in the add box
+(autocomplete) to add it. On return, the watchlist ranks what changed **since you
+last checked**; **Mark all as seen** advances that point; each stock has a **News**
+panel whose headlines you can mark read (persists per-user). Same handle + PIN on
+another device = the identical watchlist.
 
 ---
 

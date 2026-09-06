@@ -126,11 +126,11 @@ export default function Home() {
   // Debounced typeahead: suggest company names as the user types.
   useEffect(() => {
     const q = symbol.trim();
-    if (q.length < 2) { setSuggestions([]); return; }
+    if (q.length < 1) { setSuggestions([]); return; }
     const t = setTimeout(async () => {
       const r = await api.search(q);
       setSuggestions(r.items ?? []);
-    }, 250);
+    }, 200);
     return () => clearTimeout(t);
   }, [symbol]);
 

@@ -6,8 +6,8 @@ export type SymbolSuggestion = { symbol: string; name: string };
 
 export async function searchSymbols(q: string): Promise<SymbolSuggestion[]> {
   const query = q.trim();
-  if (query.length < 2) return [];
-  const url = `${SEARCH}?q=${encodeURIComponent(query)}&quotesCount=15&newsCount=0`;
+  if (query.length < 1) return [];
+  const url = `${SEARCH}?q=${encodeURIComponent(query)}&quotesCount=30&newsCount=0`;
   try {
     const res = await fetch(url, {
       headers: {
@@ -29,7 +29,7 @@ export async function searchSymbols(q: string): Promise<SymbolSuggestion[]> {
       if (!/^[A-Z][A-Z0-9&-]*$/.test(base) || seen.has(base)) continue;
       seen.add(base);
       out.push({ symbol: base, name: String(x.longname ?? x.shortname ?? base) });
-      if (out.length >= 8) break;
+      if (out.length >= 12) break;
     }
     return out;
   } catch {

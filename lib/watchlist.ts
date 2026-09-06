@@ -7,6 +7,27 @@ import type { Quote, SymbolChange } from "@/lib/types";
 const TTL_SECONDS = Number(process.env.QUOTE_FRESHNESS_TTL_SECONDS ?? 60);
 const NEWS_TTL_MINUTES = Number(process.env.NEWS_TTL_MINUTES ?? 15);
 
+// Common corporate-name words that don't identify a company on their own.
+const NAME_STOP = new Set([
+  "ltd", "limited", "india", "the", "co", "corporation", "company",
+  "industries", "enterprises", "&",
+]);
+
+// Relevance guard: keep a headline only if it actually names the company —
+// either the ticker as a whole word, or a distinctive word from its name.
+// Cheap precision boost over raw Google-News relevance (kills ambiguous mis-tags).
+function isRelevantNews(title: string, name: string | null, symbol: string): boolean {
+  const t = title.toLowerCase();
+  const esc = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`\\b${esc}\\b`, "i").test(title)) return true;
+  const tokens = (name ?? "")
+    .toLowerCase()
+    .replace(/[.,()]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !NAME_STOP.has(w));
+  return tokens.some((tok) => t.includes(tok));
+}
+
 // --- Watchlist mutations ----------------------------------------------------
 export async function addSymbol(
   userId: string,
@@ -93,7 +114,9 @@ async function refreshNewsForSymbol(q: Quote): Promise<void> {
     return;
   }
   try {
-    const items = await fetchNews(q.name || q.symbol);
+    const items = (await fetchNews(q.name || q.symbol)).filter((it) =>
+      isRelevantNews(it.title, q.name, q.symbol)
+    );
     for (const it of items) {
       await prisma.newsItem.upsert({
         where: { symbol_url: { symbol: q.symbol, url: it.url } },
