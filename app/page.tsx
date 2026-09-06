@@ -14,10 +14,10 @@ const api = {
   async session() {
     return (await fetch("/api/session")).json();
   },
-  async signIn(handle: string) {
+  async signIn(handle: string, pin: string) {
     return (await fetch("/api/session", {
       method: "POST",
-      body: JSON.stringify({ handle }),
+      body: JSON.stringify({ handle, pin }),
     })).json();
   },
   async dashboard(): Promise<Dashboard> {
@@ -32,6 +32,9 @@ const api = {
   async seen() {
     return (await fetch("/api/seen", { method: "POST" })).json();
   },
+  async signOut() {
+    return (await fetch("/api/session", { method: "DELETE" })).json();
+  },
 };
 
 function timeAgo(iso: string) {
@@ -45,6 +48,8 @@ function timeAgo(iso: string) {
 export default function Home() {
   const [handle, setHandle] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [pin, setPin] = useState("");
+  const [signInError, setSignInError] = useState<string | null>(null);
   const [symbol, setSymbol] = useState("");
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(false);
@@ -85,8 +90,14 @@ export default function Home() {
 
   async function doSignIn() {
     if (!input.trim()) return;
-    const r = await api.signIn(input);
+    setSignInError(null);
+    const r = await api.signIn(input, pin);
+    if (r && "error" in r && r.error) {
+      setSignInError(r.error as string);
+      return;
+    }
     setHandle(r.handle);
+    setPin("");
     await refresh();
   }
 
@@ -111,16 +122,27 @@ export default function Home() {
         <div className="w-full max-w-sm p-8 bg-white rounded-2xl shadow-sm border border-slate-200">
           <h1 className="text-xl font-bold">Smart Watchlist</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Sign in with any handle. Use the same handle on another device to
-            see the identical watchlist — state lives on the server.
+            Enter a handle and a PIN. A new handle sets its PIN; returning to it
+            needs the same PIN. Same handle + PIN on another device = same
+            watchlist.
           </p>
           <input
             className="mt-4 w-full border border-slate-300 rounded-lg px-3 py-2"
-            placeholder="e.g. asha"
+            placeholder="handle — e.g. asha"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => { setInput(e.target.value); setSignInError(null); }}
             onKeyDown={(e) => e.key === "Enter" && doSignIn()}
           />
+          <input
+            type="password"
+            inputMode="numeric"
+            className="mt-2 w-full border border-slate-300 rounded-lg px-3 py-2"
+            placeholder="PIN (4–6 digits)"
+            value={pin}
+            onChange={(e) => { setPin(e.target.value.replace(/\D/g, "").slice(0, 6)); setSignInError(null); }}
+            onKeyDown={(e) => e.key === "Enter" && doSignIn()}
+          />
+          {signInError && <p className="mt-2 text-sm text-rose-600">{signInError}</p>}
           <button
             onClick={doSignIn}
             className="mt-3 w-full bg-emerald-600 text-white rounded-lg py-2 font-medium hover:bg-emerald-700"
@@ -143,12 +165,20 @@ export default function Home() {
               {dash && ` · last checked ${timeAgo(dash.lastSeenAt)}`}
             </p>
           </div>
-          <button
-            onClick={async () => { await api.seen(); refresh(); }}
-            className="text-sm bg-slate-900 text-white rounded-lg px-3 py-2 hover:bg-slate-700"
-          >
-            Mark all as seen
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={async () => { await api.seen(); refresh(); }}
+              className="text-sm bg-slate-900 text-white rounded-lg px-3 py-2 hover:bg-slate-700"
+            >
+              Mark all as seen
+            </button>
+            <button
+              onClick={async () => { await api.signOut(); setHandle(null); setDash(null); setInput(""); }}
+              className="text-sm text-slate-400 hover:text-rose-600"
+            >
+              Sign out
+            </button>
+          </div>
         </header>
 
 

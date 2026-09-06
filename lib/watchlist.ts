@@ -7,18 +7,6 @@ import type { Quote, SymbolChange } from "@/lib/types";
 const TTL_SECONDS = Number(process.env.QUOTE_FRESHNESS_TTL_SECONDS ?? 60);
 const NEWS_TTL_MINUTES = Number(process.env.NEWS_TTL_MINUTES ?? 15);
 
-// --- Identity ---------------------------------------------------------------
-export async function getOrCreateUser(handle: string) {
-  const clean = handle.trim().toLowerCase();
-  return prisma.user.upsert({
-    where: { handle: clean },
-    update: {},
-    // Start the global watermark 24h back so a first-time user immediately sees
-    // the last day's meaningful changes instead of an empty screen.
-    create: { handle: clean, lastSeenAt: new Date(Date.now() - 24 * 3600 * 1000) },
-  });
-}
-
 // --- Watchlist mutations ----------------------------------------------------
 export async function addSymbol(
   userId: string,
