@@ -10,9 +10,20 @@ export type SymbolSuggestion = { symbol: string; name: string };
 
 function localMatches(query: string): SymbolSuggestion[] {
   const q = query.toLowerCase();
-  return NSE_SYMBOLS.filter(
-    (s) => s.symbol.toLowerCase().startsWith(q) || s.name.toLowerCase().includes(q)
-  );
+  const bySymbol: SymbolSuggestion[] = [];
+  const byName: SymbolSuggestion[] = [];
+  for (const s of NSE_SYMBOLS) {
+    if (s.symbol.toLowerCase().startsWith(q)) {
+      bySymbol.push(s);
+    } else if (
+      s.name.toLowerCase().split(/[\s&(]+/).some((w) => w.startsWith(q))
+    ) {
+      // match a WORD prefix in the name (so "t" → Tata/Titan/Trent, not every
+      // name that merely contains the letter "t")
+      byName.push(s);
+    }
+  }
+  return [...bySymbol, ...byName]; // symbol-prefix matches rank first
 }
 
 async function yahooMatches(query: string): Promise<SymbolSuggestion[]> {
