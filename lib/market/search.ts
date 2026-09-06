@@ -1,13 +1,22 @@
-// Typeahead search for the add box. Uses Yahoo's crumb-free search endpoint,
-// returns NSE/BSE-listed equities as {symbol, name} suggestions.
+import { NSE_SYMBOLS } from "./nse-symbols";
+
+// Typeahead for the add box. LOCAL prefix/substring match over a bundled list of
+// major NSE stocks gives instant results from the first letter (Yahoo's search
+// can't do short prefixes). For longer queries we augment with live Yahoo search
+// to cover the long tail beyond the bundled list.
 const SEARCH = "https://query1.finance.yahoo.com/v1/finance/search";
 
 export type SymbolSuggestion = { symbol: string; name: string };
 
-export async function searchSymbols(q: string): Promise<SymbolSuggestion[]> {
-  const query = q.trim();
-  if (query.length < 1) return [];
-  const url = `${SEARCH}?q=${encodeURIComponent(query)}&quotesCount=30&newsCount=0`;
+function localMatches(query: string): SymbolSuggestion[] {
+  const q = query.toLowerCase();
+  return NSE_SYMBOLS.filter(
+    (s) => s.symbol.toLowerCase().startsWith(q) || s.name.toLowerCase().includes(q)
+  );
+}
+
+async function yahooMatches(query: string): Promise<SymbolSuggestion[]> {
+  const url = `${SEARCH}?q=${encodeURIComponent(query)}&quotesCount=20&newsCount=0`;
   try {
     const res = await fetch(url, {
       headers: {
@@ -19,20 +28,39 @@ export async function searchSymbols(q: string): Promise<SymbolSuggestion[]> {
     });
     if (!res.ok) return [];
     const json = (await res.json()) as { quotes?: Array<Record<string, unknown>> };
-    const seen = new Set<string>();
     const out: SymbolSuggestion[] = [];
     for (const x of json.quotes ?? []) {
       const raw = String(x.symbol ?? "");
       const isEquity = x.quoteType === "EQUITY" || x.quoteType === undefined;
       if (!isEquity || !(raw.endsWith(".NS") || raw.endsWith(".BO"))) continue;
       const base = raw.replace(/\.(NS|BO)$/, "").toUpperCase();
-      if (!/^[A-Z][A-Z0-9&-]*$/.test(base) || seen.has(base)) continue;
-      seen.add(base);
+      if (!/^[A-Z][A-Z0-9&-]*$/.test(base)) continue;
       out.push({ symbol: base, name: String(x.longname ?? x.shortname ?? base) });
-      if (out.length >= 12) break;
     }
     return out;
   } catch {
     return [];
   }
+}
+
+export async function searchSymbols(q: string): Promise<SymbolSuggestion[]> {
+  const query = q.trim();
+  if (!query) return [];
+
+  const seen = new Set<string>();
+  const out: SymbolSuggestion[] = [];
+  const push = (s: SymbolSuggestion) => {
+    if (seen.has(s.symbol) || out.length >= 12) return;
+    seen.add(s.symbol);
+    out.push(s);
+  };
+
+  // Instant local results first (works from the first letter).
+  for (const s of localMatches(query)) push(s);
+
+  // Augment with Yahoo for longer queries (long tail beyond the bundled list).
+  if (query.length >= 3 && out.length < 12) {
+    for (const s of await yahooMatches(query)) push(s);
+  }
+  return out;
 }
