@@ -233,15 +233,11 @@ function ChangeCard({
   onRemove: (s: string) => void;
   onMarkRead?: (s: string) => void;
 }) {
-  // Primary number = move SINCE YOU LAST CHECKED (vs the watermark baseline) —
-  // the app's core question. If we have no snapshot from before the watermark
-  // yet, fall back to today's move (vs previous close), clearly labelled.
-  const cur = c.current?.price ?? null;
-  const base = c.baselinePrice;
-  const sincePct = cur != null && base != null && base > 0 ? ((cur - base) / base) * 100 : null;
-  const shownPct = sincePct ?? c.current?.dayChangePct ?? null;
-  const windowLabel = sincePct != null ? "since last check" : "today";
-  const up = (shownPct ?? 0) >= 0;
+  // Per-stock number = today's change vs previous close (the universal watchlist
+  // figure — always meaningful, never all-zeros when the market is closed). The
+  // "since you last checked" delta lives in the "Needs your attention" headline,
+  // where it only appears when something meaningful actually moved.
+  const up = (c.current?.dayChangePct ?? 0) >= 0;
   return (
     <div
       className={`rounded-xl border p-4 bg-white flex items-start justify-between gap-4 ${
@@ -272,13 +268,13 @@ function ChangeCard({
         )}
       </div>
       <div className="flex flex-col items-end gap-1 shrink-0">
-        {shownPct != null && (
+        {c.current && (
           <div className="text-right leading-tight">
             <div className={`text-sm font-medium ${up ? "text-emerald-600" : "text-rose-600"}`}>
               {up ? "+" : ""}
-              {shownPct.toFixed(2)}%
+              {c.current.dayChangePct.toFixed(2)}%
             </div>
-            <div className="text-[10px] text-slate-400">{windowLabel}</div>
+            <div className="text-[10px] text-slate-400">today</div>
           </div>
         )}
         {highlight && onMarkRead && (
