@@ -16,6 +16,17 @@ export async function getStockNews(
   symbol: string
 ): Promise<StockNewsItem[]> {
   const sym = symbol.trim().toUpperCase();
+
+  // Recency window: news since the user's watermark, but never older than 7
+  // days. New users (watermark = 24h ago) see the last day; returning users see
+  // since they last checked; nobody sees weeks-old news.
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { lastSeenAt: true },
+  });
+  const cap = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+  const since = user && user.lastSeenAt > cap ? user.lastSeenAt : cap;
+
   const reads = await prisma.newsRead.findMany({
     where: { userId },
     select: { newsItemId: true },
@@ -25,6 +36,7 @@ export async function getStockNews(
   const items = await prisma.newsItem.findMany({
     where: {
       symbol: sym,
+      publishedAt: { gte: since },
       ...(readIds.length ? { id: { notIn: readIds } } : {}),
     },
     orderBy: { publishedAt: "desc" },
