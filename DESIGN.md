@@ -1,433 +1,132 @@
-# Smart Market Watchlist — Design Document
+# Smart Market Watchlist — Design
 
 | | |
 |---|---|
-| **Status** | Final (v1.0) |
-| **Category** | Engineering Build Challenge — CODE 2026 |
-| **Theme** | Build a Smart Market Watchlist |
-| **Last updated** | 2026-09-06 |
-| **Live system** | https://groww-smart-watchlist-rukmini1.vercel.app |
+| **Theme** | Build a Smart Market Watchlist (CODE 2026) |
+| **Live** | https://groww-smart-watchlist-rukmini1.vercel.app |
+| **Stack** | Next.js (React + API routes) · Postgres/Prisma (Neon) · Vercel |
 
 ---
 
-## 1. Abstract
+## Thesis — don't build the obvious watchlist
 
-The Smart Market Watchlist reframes a watchlist from a *passive live-price list*
-into an **attention engine**. Instead of asking the user to scan rows and set
-manual alerts, the system answers a sharper question on every visit: **"what has
-meaningfully changed since I last looked, and what deserves my attention first?"**
-
-The central design bet is that **"meaningful" is relative, not absolute**. A 2%
-move is a large event for a stable large-cap and statistical noise for a volatile
-small-cap. We therefore score every change against *the stock's own normal
-behaviour* across five independent signals, combine them into a single attention
-score, and present a ranked list with a plain-English reason per item — with zero
-alert configuration by the user.
+A normal watchlist shows *state* (live prices) and makes the user set manual
+alerts. This one is an **attention engine**: on every visit it answers *"what has
+meaningfully changed since I last looked, and what deserves attention first?"* —
+with **zero configuration**. The system decides what's meaningful, per stock, and
+ranks it with a plain-English reason.
 
 ---
 
-## 2. Problem Statement & Context
+## High-level architecture
 
-Users track stocks to notice change, but existing watchlists surface *state*
-(current price) rather than *change since last seen*. The burden of detecting
-what matters is pushed onto the user through manual, threshold-based alerts. This
-fails two ways: fixed thresholds mis-fire (too noisy for volatile names, too
-quiet for stable ones), and the user must know in advance what to watch for.
+```
+Browser (React, app/page.tsx)
+        │  HTTPS/JSON
+        ▼
+Next.js API routes  ── Change Engine (lib/change-engine.ts)   ← the core
+ session · watchlist   Market Adapter (lib/market/adapter.ts) ← Yahoo + realized vol/avg vol
+ seen · news · search   News reader   (lib/market/news.ts)     ← Google News RSS
+        │
+        ▼
+Postgres (Prisma) — append-only Snapshots · users · watchlist · news · read-state
+        ▲
+Poller (/api/poll, Vercel Cron) — one fetch per UNIQUE symbol, shared by all users
+```
 
-**Goal:** a watchlist that computes what changed since the user's last visit,
-decides what is meaningful *per stock*, and ranks it — reliably, with real data,
-and in a way that persists across sessions and devices.
-
----
-
-## 3. Tenets
-
-1. **Judgement over configuration.** The system decides what is meaningful; the
-   user configures nothing.
-2. **Relative, not absolute.** Significance is measured against each stock's own
-   volatility and history.
-3. **Never fabricate.** Real data, the last-known value, or honest absence —
-   never an invented number.
-4. **Correct under concurrency.** Append-only state; no torn reads, no lost
-   writes.
-5. **Simple until complexity earns its place.** Every component must be
-   justifiable against the problem; scope creep is rejected explicitly.
+- **Append-only snapshots** are the backbone: "what changed since a point in
+  time" is a diff between two immutable rows, which also removes read/write races.
+- **Stateless sessions** (a handle cookie; identity re-resolved per request) +
+  **durable state in Postgres** → scales horizontally, persists across devices.
 
 ---
 
-## 4. Requirements
+## The core: what counts as a "meaningful change"
 
-### 4.1 Functional
+Meaningful is **relative, not absolute** — a 2% move is huge for a stable
+large-cap and noise for a volatile small-cap. Each stock is scored against **its
+own recent behaviour** across four signals (`lib/change-engine.ts`):
 
-| # | Requirement |
-|---|---|
-| F1 | Create and manage a per-user watchlist (add/remove NSE symbols) |
-| F2 | Show latest market information per symbol (price, day change, volume) |
-| F3 | On return, compute and rank **what changed since last checked** |
-| F4 | Persist state across sessions and devices |
-| F5 | Surface *why* each item matters in plain English |
-
-### 4.2 Non-functional
-
-| # | Attribute | Target |
+| Signal | Rule | Basis |
 |---|---|---|
-| N1 | **Reliability** | Degrade gracefully when a data source fails; never crash a request |
-| N2 | **Data integrity** | Never present stale data as live; deterministic conflict resolution |
-| N3 | **Consistency** | Cross-device reads reflect the same server-side state |
-| N4 | **Scalability** | Data-fetch cost independent of user count |
-| N5 | **Latency** | Dashboard read served from cached snapshots (no synchronous upstream fan-out) |
-| N6 | **Maintainability** | Pure, testable core; provider-abstracted data layer |
+| Price (volatility-relative) | `z = |move since last checked| ÷ typical daily move` | flags moves large *for this stock* |
+| Volume | today's volume ÷ its 3-month average | conviction — something happened |
+| Breakout | crossed / near its 52-week high or low | discrete technical event |
+| News | a real headline published since your watermark | scheduled/fundamental news |
 
-### 4.3 Out of scope (conscious cuts)
+- **"Typical daily move" = the stock's realized volatility** — stddev of daily
+  returns over Yahoo's 3-month series (computed in the adapter, no extra call);
+  falls back to a market-cap prior only with no history.
+- **Combination = weighted noisy-OR:** `score = 1 − Π(1 − wᵢ·sᵢ)` — independent
+  signals compound but stay in [0,1]. `≥ 0.25` → **"Needs your attention"**
+  (ranked); else quiet. The top signal becomes the headline.
 
-Real authentication/credentials, order placement/trading, charting, push
-notifications, and **portfolio/broker holdings sync**. The last is deliberate:
-this is a *watchlist* (stocks you track), not a *portfolio tracker* (stocks you
-own). Holdings sync and position-weighting are a different product and would be
-scope creep against the core question.
-
----
-
-## 5. High-Level Architecture
-
-```mermaid
-flowchart TB
-    subgraph Client
-        UI["React UI (app/page.tsx)<br/>watchlist · ranked changes · Since selector"]
-    end
-
-    subgraph Server["Next.js App Server (Vercel)"]
-        API["API Routes<br/>/session /watchlist /seen /poll"]
-        SVC["Service Layer (lib/watchlist.ts)<br/>snapshots · dashboard · watermark"]
-        ENG["Change Engine (lib/change-engine.ts)<br/>5-signal attention score"]
-        ADP["Market-Data Adapter (lib/market/adapter.ts)<br/>staleness · provenance · fallback"]
-        NEWS["News Reader (lib/market/news.ts)<br/>RSS parse · dedupe · throttle"]
-    end
-
-    subgraph Data["Persistence"]
-        PG[("PostgreSQL / Neon (Prisma)<br/>users · watchlist · snapshots<br/>news · symbol_meta")]
-    end
-
-    subgraph External["External Data Sources"]
-        YF["Yahoo Finance v8/chart"]
-        GN["Google News RSS"]
-    end
-
-    CRON["Scheduler<br/>Vercel Cron → /api/poll"]
-
-    UI -->|HTTPS JSON| API
-    API --> SVC
-    SVC --> ENG
-    SVC --> ADP
-    SVC --> NEWS
-    SVC --> PG
-    ADP --> YF
-    NEWS --> GN
-    CRON --> API
-```
-
-**Component responsibilities**
-
-| Component | Responsibility |
-|---|---|
-| **UI** | Render the ranked watchlist; select lookback window; mark-as-seen |
-| **API Routes** | Thin HTTP boundary; auth via handle cookie; force-dynamic |
-| **Service Layer** | Orchestrates reads/writes; builds the dashboard; owns the watermark |
-| **Change Engine** | Pure function: scores change signals into an attention score |
-| **Market-Data Adapter** | Normalises quotes; computes realized volatility; tags provenance & staleness; omits (never fabricates) failed symbols |
-| **News Reader** | Fetches/parses Google News RSS; dedupes; throttles per symbol |
-| **Persistence** | Append-only snapshots + relational state (Prisma/Postgres) |
-| **Scheduler** | Triggers `/api/poll` to refresh shared, per-symbol data |
+This is the one piece with real depth, and it's what makes the watchlist "smart"
+rather than a price list with alerts.
 
 ---
 
-## 6. Key Workflows
+## The six "You decide" points — decision, how, why
 
-### 6.1 Read path — "what changed since I last checked"
-
-```mermaid
-sequenceDiagram
-    participant U as Browser
-    participant A as /api/watchlist
-    participant S as Service Layer
-    participant DB as Postgres
-    participant E as Change Engine
-
-    U->>A: GET /api/watchlist
-    A->>S: buildDashboard(userId)
-    S->>DB: symbols for user
-    S->>DB: latest snapshot per symbol
-    S->>DB: baseline snapshot (fetchedAt ≤ lastSeenAt)
-    S->>DB: news published since lastSeenAt
-    S->>DB: daily returns (for realized volatility)
-    S->>E: scoreSymbol(quote, baseline, returns, news)
-    E-->>S: attentionScore + signals + headline
-    S-->>A: ranked {changes[], quiet[], staleness}
-    A-->>U: JSON → rendered, ranked list
-```
-
-The anchor is always the user's `lastSeenAt` watermark — if nothing changed
-since then, the "needs attention" list is simply empty. Staleness is computed at
-read time as a function of "now"; rows are never mutated to mark them stale.
-
-### 6.2 Write path — scheduled ingestion (fan-out control)
-
-```mermaid
-sequenceDiagram
-    participant C as Scheduler (Cron / active sessions)
-    participant P as /api/poll
-    participant S as Service Layer
-    participant ADP as Market Adapter
-    participant NEWS as News Reader
-    participant DB as Postgres
-
-    C->>P: GET /api/poll
-    P->>DB: SELECT DISTINCT symbol (all users) + seed set
-    P->>S: refreshSnapshots(uniqueSymbols)
-    S->>ADP: getQuotes(symbols)   %% one batch, shared by all users
-    ADP->>ADP: Yahoo v8/chart per symbol → omit on failure (keep last snapshot)
-    ADP-->>S: normalized quotes (source, fetchedAt)
-    S->>DB: INSERT snapshots (append-only)
-    S->>NEWS: refresh news (throttled per symbol, parallel)
-    NEWS->>DB: UPSERT news items (dedupe by symbol+url)
-    P-->>C: {polled, sources, at}
-```
-
-**Key property:** the poller fetches each **unique** symbol **once**, shared
-across every user. Fetch cost is decoupled from the number of users.
-
----
-
-## 7. Data Model
-
-```mermaid
-erDiagram
-    User ||--o{ WatchlistItem : has
-    User {
-        string id PK
-        string handle UK
-        datetime lastSeenAt "the 'last checked' watermark"
-    }
-    WatchlistItem {
-        string id PK
-        string userId FK
-        string symbol
-    }
-    Snapshot {
-        string id PK
-        string symbol
-        float price
-        float dayChangePct
-        float volume
-        float avgVolume
-        float week52High
-        float week52Low
-        float volatilityPct "realized daily volatility (3-mo)"
-        string source "provenance: yahoo"
-        datetime fetchedAt
-    }
-    NewsItem {
-        string id PK
-        string symbol
-        string title
-        string url UK
-        datetime publishedAt
-    }
-    SymbolMeta {
-        string symbol PK
-        string name "real company name (news query)"
-        datetime lastNewsAt "throttle"
-    }
-```
-
-**Design notes**
-
-- **Snapshots are append-only.** A price row is never mutated. This is what makes
-  "diff since a point in time" both possible and correct, and it removes an
-  entire class of read/write races by construction. `Snapshot` is intentionally
-  *not* a foreign-key child of a user — it is shared, per-symbol market state.
-- **One watermark per user** (`lastSeenAt`) models the single, human-sized
-  concept "since I last checked". It advances only on an explicit "mark as seen";
-  if nothing changed since it, the attention list is empty — the honest result.
-- `SymbolMeta` caches the resolved company name and throttles news fetches
-  (news changes far more slowly than price).
-
----
-
-## 8. The "Meaningful Change" Model (core algorithm)
-
-Each symbol is scored across five independent signals (`lib/change-engine.ts`).
-Signal scores are in `[0,1]`; discrete, hard events carry more weight than
-continuous drift.
-
-| Signal | Definition | Weight |
+| Requirement | How we handled it | Why (justification) |
 |---|---|---|
-| **News** | a real headline published since the anchor | 1.0 |
-| **Breakout** | crossed / near 52-week high or low | 0.9 |
-| **Price (volatility-relative)** | `|move since anchor| ÷ typical daily move` (z-score) | 0.8 |
-| **Volume** | today's volume ÷ 3-month average | 0.6 |
-
-*(A circuit signal was intentionally dropped: real per-stock circuit bands are
-not available from a free feed, and hardcoding ±20% would be a fabricated band —
-so we score only signals we can source honestly.)*
-
-**Typical daily move** = the stock's **realized volatility**, computed as the
-standard deviation of daily close-to-close returns over the 3-month series the
-adapter already fetches — a true per-stock figure at zero extra API cost. A
-market-cap-based prior (large ≈ 1.2%, mid ≈ 1.8%, small ≈ 2.8%) is used only as a
-last resort for a symbol with no usable history.
-
-**Combination — weighted noisy-OR.** Each signal is independent evidence that
-"something happened", so multiple moderate signals compound while the total stays
-bounded in `[0,1]`:
-
-```
-attentionScore = 1 − Π_i (1 − wᵢ · sᵢ)
-```
-
-Symbols with `attentionScore ≥ 0.25` appear under **"Needs your attention"**,
-ranked descending; the rest are **"quiet"**. The highest-weighted firing signal
-becomes the card's plain-English headline (e.g. *"↑ 4.7% since you last checked —
-1.7× its typical daily move"*).
-
-> **Why this beats a fixed % threshold:** a fixed threshold mis-scores both ends
-> of the volatility spectrum. Normalising by the stock's own behaviour makes the
-> same 4% move rank differently for a bond-like large-cap vs. a volatile
-> small-cap — which is exactly what a human trader intuits.
+| **What counts as a meaningful change** | 4-signal, volatility-relative attention score (above) | Absolute thresholds mis-score both stable and volatile stocks; scoring vs. the stock's own behaviour is what a human intuits |
+| **What information to surface** | Ranked "Needs attention" + plain-English reason (+ underlying figures on flagged cards); a "quiet" list = the rest of the watchlist; per-stock news panel | Signal over noise: highlight the few that matter, keep the full list visible, keep quiet cards clean |
+| **State persists across sessions/devices** | Handle + **scrypt-hashed PIN**; stateless cookie session; all state in Postgres keyed to the user | DB (not the cookie) is the source of truth → same handle+PIN on any device = same watchlist; stateless auth scales horizontally |
+| **Stale / delayed / conflicting data** | Every quote carries `fetchedAt`; staleness computed at read time → "delayed" badge; failures **omitted, never fabricated** (last real snapshot persists); dedup by latest-per-symbol and `(symbol,url)` for news; 6s upstream timeouts | Never present stale as live or invent data; single authoritative source with deterministic freshest-wins (multi-source reconciliation is the stated next step) |
+| **Scales for larger watchlists / more users** | Poll **once per unique symbol**, shared across all users → **O(unique symbols)**, not O(users×symbols); reads from cached snapshots; stateless instances; pooled DB | Decoupling fetch cost from user count is the key scaling lever; a single poller is correct until ~thousands of symbols (then shard + queue) |
+| **Simple vs. complex** | Kept: watchlist + engine + news + PIN. Cut: portfolio/holdings sync, multiple lists, real-time push, broker import | Each cut is off the thesis; naming *when* we'd add them turns omissions into judgement, not gaps |
 
 ---
 
-## 9. API Design
+## Deliberately kept simple (and why)
 
-| Method | Route | Purpose |
-|---|---|---|
-| `POST` | `/api/session` | Sign in / create user by handle (sets cookie) |
-| `GET` | `/api/session` | Current handle |
-| `GET` | `/api/watchlist?since=<hours>` | Ranked dashboard for a lookback window |
-| `POST` | `/api/watchlist` | Add a symbol |
-| `DELETE` | `/api/watchlist` | Remove a symbol |
-| `POST` | `/api/seen` | Advance the "last checked" watermark (atomic) |
-| `GET` | `/api/poll` | Scheduled ingestion (cron-triggered) |
-
-All data routes are `force-dynamic` and identity-scoped via the handle cookie.
+- **No portfolio/holdings** — it's a *watchlist* (stocks you track), not a
+  position tracker; holdings + P&L would be a different product.
+- **No real-time push** — a 30s shared poll is near-real-time; websockets would
+  need extra infra for a use case that rarely needs millisecond sync.
+- **No broker OAuth / multiple lists** — scope beyond the brief.
 
 ---
 
-## 10. Design Decisions & Alternatives
+## Honest limitations
 
-| Decision | Chosen | Alternative rejected | Rationale |
-|---|---|---|---|
-| Stack | Next.js full-stack | Separate SPA + API service | One repo/deploy, instant live URL, still cleanly layered |
-| Persistence | Postgres (server-side) | Browser `localStorage` | Cross-device is a hard requirement; client storage fails it |
-| Price history | Append-only snapshots | Mutate-in-place latest row | Correct deltas + race-free by construction |
-| Significance | Volatility-relative multi-signal | Fixed % threshold | Fixed % mis-scores stable and volatile names alike |
-| "Last checked" | One watermark per user | Per-symbol watermarks / lookback selector | Faithful to "since I last checked"; no per-row noise, no scope creep |
-| Data | Real API only; last-known snapshot on failure | Fabricated mock fallback | Never invent prices; append-only history is the honest fallback |
-| Ingestion | Single per-symbol poller | Per-user polling / queue+stream | O(unique symbols); a queue would be over-engineering at this scale |
+- **Conflicting data**: only *stale/failed/duplicate* are demonstrated; true
+  multi-source disagreement isn't (single authoritative source by choice).
+- **PIN recovery**: no "forgot PIN" — we collect no email/phone, so a reset
+  couldn't be secure; production would add email/OTP recovery.
+- **Autocomplete**: instant local prefix search covers ~120 major NSE names;
+  rarer stocks resolve via Yahoo at 3+ chars or by exact ticker (NSE's full
+  list blocks server IPs).
+- **Cron on Vercel free tier** is daily; active sessions also trigger the shared
+  poll. Pro plan or an external 1-min pinger restores minute-level polling.
 
 ---
 
-## 11. Failure Modes & Resilience
+## Data sources (all free, no API keys)
 
-| Failure | Handling |
+| Data | Source |
 |---|---|
-| Upstream (Yahoo) down / bad row | Failed symbol omitted (never fabricated); last real snapshot keeps showing and ages into a "delayed" badge; one bad symbol never poisons the batch |
-| Stale / delayed data | `fetchedAt` + `source` on every quote; UI shows a **delayed** badge past a freshness TTL; staleness computed at read time |
-| Conflicting / duplicate data | Adapter dedupes by symbol and keeps the freshest; news deduped by (symbol, url) |
-| News source failure | Best-effort; prices already persisted; dashboard renders without events |
-| Concurrency (poll writes while user reads) | Append-only snapshots + atomic single-write watermark → no torn reads, no lost updates |
-| Slow upstream | 6s request timeout on every outbound fetch; request path never hangs |
+| Price, day change, 52-wk range, company name, 3-mo series (→ avg volume, realized volatility) | Yahoo Finance `v8/chart` |
+| Company-name autocomplete (long tail) | Yahoo `v1/search` + a bundled NSE list for instant prefixes |
+| Per-stock news | Google News RSS (queried by company name, title-relevance filtered, deduped) |
+
+If a source fails, the app degrades to the last real snapshot / no news — it
+never fabricates.
 
 ---
 
-## 12. Scalability
-
-**Fan-out is the central scaling concern.** A naive design fetches per user →
-`O(users × symbols)`. This system fetches each **unique** symbol once, shared
-across all users:
+## Project map
 
 ```
-Naive:   cost = Σ_users (symbols_u)              → grows with users
-This:    cost = |⋃_users symbols_u|  = O(unique symbols)  → independent of users
+lib/change-engine.ts    the "meaningful change" scoring (pure, unit-testable)
+lib/market/adapter.ts   Yahoo prices + realized volatility + avg volume + staleness
+lib/market/news.ts      Google News RSS reader (dependency-free parse)
+lib/market/search.ts    typeahead: local NSE list + Yahoo augment
+lib/watchlist.ts        service layer: snapshots, news refresh, dashboard, watermark
+lib/session.ts          handle + scrypt PIN, stateless cookie session
+prisma/schema.prisma    data model (users, watchlist, snapshots, news, read-state)
+app/api/*               session · watchlist · seen · poll · news · search
+app/page.tsx            UI: ranked attention + quiet list + news panels + autocomplete
+scripts/smoke.ts        proves the engine + graceful degradation with no DB/network
 ```
-
-- **Reads** are served from cached snapshots; the browser never fans out N
-  upstream calls.
-- **Writes** are one batched poll on a schedule.
-- **Growth path (stated, not hand-waved):** a single poller is correct into the
-  thousands of symbols. Beyond that — or for sub-second freshness — introduce a
-  work queue and partition symbols across workers; the append-only snapshot model
-  is already compatible with that.
-
----
-
-## 13. Security & Privacy
-
-- **Identity, not credentials.** A user is a handle; the graded property is that
-  state persists server-side and is reachable from any device. Real
-  authentication is explicitly out of scope for the challenge and would slot in
-  behind the same `currentUserId()` boundary.
-- **No secrets in the client.** Data-source access requires no user secrets.
-- **Least data.** We store only what the change engine needs (public market data
-  + a handle); no PII beyond a self-chosen handle.
-
----
-
-## 14. Observability & Operations
-
-- The poll endpoint returns `{ polled, sources, at }` — a live view of how many
-  symbols resolved successfully (e.g. `{ yahoo: 6 }`), which is the primary
-  health signal for data quality.
-- Provenance (`source`) and `fetchedAt` on every snapshot make data lineage
-  auditable directly from the database.
-- Autonomous freshness: a server cron (`vercel.json`) drives `/api/poll`; active
-  browser sessions also trigger the shared poll, so the system self-updates
-  without manual intervention.
-
----
-
-## 15. Testing Strategy
-
-- **Pure core.** The change engine is a pure function of (quote, baseline,
-  returns, news) → score, unit-testable without a database or network.
-  `scripts/smoke.ts` exercises the discriminating cases: same % move scoring
-  higher for a large-cap than a small-cap, quiet moves falling below threshold,
-  and breakout/news firing.
-- **Honesty is observable in the smoke run:** with no network the adapter returns
-  an empty result rather than fabricating quotes — real, or nothing.
-
----
-
-## 16. Future Work
-
-1. **Realized volatility from the 3-month series we already fetch** (sharper
-   z-scores than the market-cap prior).
-2. **Portfolio-aware mode** — an opt-in that ingests holdings (via a broker's
-   official API) to weight attention by position size. Deliberately separate from
-   the watchlist core.
-3. **Per-user notification digest** built on the same attention score.
-4. **Work-queue ingestion** at the scale where a single poller no longer fits.
-
----
-
-## Appendix A — Technology Stack
-
-| Layer | Choice |
-|---|---|
-| Frontend | React 18 + Next.js 14 (App Router), Tailwind CSS |
-| Backend | Next.js API routes (Node) |
-| ORM / DB | Prisma + PostgreSQL (Neon serverless) |
-| Prices | Yahoo Finance `v8/chart` (crumb-free) |
-| News | Google News RSS |
-| Hosting | Vercel (+ Vercel Cron) |
-
-## Appendix B — Glossary
-
-- **Watermark (`lastSeenAt`)** — the point in time that anchors "since you last
-  checked".
-- **Snapshot** — one immutable, append-only record of a symbol's market data at a
-  moment.
-- **Attention score** — the `[0,1]` weighted noisy-OR combination of signals used
-  to rank symbols.
-- **Provenance** — the recorded source of a quote (`yahoo`) and its `fetchedAt`,
-  used for staleness and data-lineage honesty.
