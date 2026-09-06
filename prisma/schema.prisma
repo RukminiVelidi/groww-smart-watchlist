@@ -29,6 +29,20 @@ model User {
   lastSeenAt DateTime        @default(now())
   createdAt  DateTime        @default(now())
   items      WatchlistItem[]
+  newsReads  NewsRead[]
+}
+
+// Per-user "read" marker for a (shared) news item. Marking a headline read
+// records a row here rather than deleting the shared NewsItem — so it's hidden
+// for THIS user across all their sessions/devices, but still visible to others.
+model NewsRead {
+  userId     String
+  newsItemId String
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, newsItemId])
+  @@index([userId])
 }
 
 model WatchlistItem {

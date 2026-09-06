@@ -35,6 +35,9 @@ const api = {
   async signOut() {
     return (await fetch("/api/session", { method: "DELETE" })).json();
   },
+  async search(q: string): Promise<{ items: { symbol: string; name: string }[] }> {
+    return (await fetch(`/api/search?q=${encodeURIComponent(q)}`)).json();
+  },
 };
 
 function timeAgo(iso: string) {
@@ -52,6 +55,7 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [signInError, setSignInError] = useState<string | null>(null);
   const [symbol, setSymbol] = useState("");
+  const [suggestions, setSuggestions] = useState<{ symbol: string; name: string }[]>([]);
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -102,20 +106,33 @@ export default function Home() {
     await refresh();
   }
 
-  async function doAdd() {
-    if (!symbol.trim()) return;
+  async function doAdd(override?: string) {
+    const sym = (override ?? symbol).trim();
+    if (!sym) return;
     setLoading(true);
     setAddError(null);
-    const r = await api.add(symbol);
+    const r = await api.add(sym);
     if (r && "error" in r && r.error) {
       setAddError(r.error as string);
       setLoading(false);
       return;
     }
     setSymbol("");
+    setSuggestions([]);
     await refresh();
     setLoading(false);
   }
+
+  // Debounced typeahead: suggest company names as the user types.
+  useEffect(() => {
+    const q = symbol.trim();
+    if (q.length < 2) { setSuggestions([]); return; }
+    const t = setTimeout(async () => {
+      const r = await api.search(q);
+      setSuggestions(r.items ?? []);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [symbol]);
 
   if (!handle) {
     return (
@@ -196,15 +213,32 @@ export default function Home() {
 
 
         <div className="mt-4 flex gap-2">
-          <input
-            className="flex-1 border border-slate-300 rounded-lg px-3 py-2"
-            placeholder="Add a stock — e.g. RELIANCE, TCS, INFY"
-            value={symbol}
-            onChange={(e) => { setSymbol(e.target.value); setAddError(null); }}
-            onKeyDown={(e) => e.key === "Enter" && doAdd()}
-          />
+          <div className="relative flex-1">
+            <input
+              className="w-full border border-slate-300 rounded-lg px-3 py-2"
+              placeholder="Search a stock — e.g. Reliance, TCS, Infosys"
+              value={symbol}
+              onChange={(e) => { setSymbol(e.target.value); setAddError(null); }}
+              onKeyDown={(e) => e.key === "Enter" && doAdd()}
+            />
+            {suggestions.length > 0 && (
+              <ul className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-md max-h-64 overflow-auto">
+                {suggestions.map((s) => (
+                  <li key={s.symbol}>
+                    <button
+                      onClick={() => doAdd(s.symbol)}
+                      className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-baseline gap-2"
+                    >
+                      <span className="font-medium text-sm">{s.symbol}</span>
+                      <span className="text-xs text-slate-500 truncate">{s.name}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <button
-            onClick={doAdd}
+            onClick={() => doAdd()}
             disabled={loading}
             className="bg-emerald-600 text-white rounded-lg px-4 font-medium hover:bg-emerald-700 disabled:opacity-50"
           >
@@ -280,13 +314,15 @@ function ChangeCard({
   // figure — always meaningful, never all-zeros when the market is closed). The
   // "since you last checked" delta lives in the "Needs your attention" headline,
   // where it only appears when something meaningful actually moved.
+  const [showNews, setShowNews] = useState(false);
   const up = (c.current?.dayChangePct ?? 0) >= 0;
   return (
     <div
-      className={`rounded-xl border p-4 bg-white flex items-start justify-between gap-4 ${
+      className={`rounded-xl border p-4 bg-white ${
         highlight ? "border-emerald-300 ring-1 ring-emerald-100" : "border-slate-200"
       }`}
     >
+      <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-semibold">{c.symbol}</span>
@@ -329,7 +365,54 @@ function ChangeCard({
           remove
         </button>
       </div>
+      </div>
+      <div className="mt-3 border-t border-slate-100 pt-2">
+        <button onClick={() => setShowNews((v) => !v)} className="text-xs text-slate-500 hover:text-emerald-700">
+          {showNews ? "Hide news" : "📰 News"}
+        </button>
+        {showNews && <StockNews symbol={c.symbol} />}
+      </div>
     </div>
+  );
+}
+
+type NewsRow = { id: string; title: string; url: string; source: string; publishedAt: string };
+
+// Per-stock news, loaded on demand. Each headline can be marked read, which
+// persists per-user (across sessions) and removes it from this list.
+function StockNews({ symbol }: { symbol: string }) {
+  const [items, setItems] = useState<NewsRow[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/news?symbol=${encodeURIComponent(symbol)}`)
+      .then((r) => r.json())
+      .then((d) => { if (alive) setItems(d.items ?? []); })
+      .catch(() => { if (alive) setItems([]); });
+    return () => { alive = false; };
+  }, [symbol]);
+
+  async function markRead(id: string) {
+    setItems((prev) => prev?.filter((n) => n.id !== id) ?? prev);
+    await fetch("/api/news", { method: "POST", body: JSON.stringify({ newsItemId: id }) });
+  }
+
+  if (items === null) return <p className="text-xs text-slate-400 mt-2">Loading news…</p>;
+  if (items.length === 0) return <p className="text-xs text-slate-400 mt-2">No unread news for this stock.</p>;
+  return (
+    <ul className="mt-2 space-y-2">
+      {items.map((n) => (
+        <li key={n.id} className="flex items-start justify-between gap-3">
+          <a href={n.url} target="_blank" rel="noreferrer" className="text-xs text-slate-700 hover:underline">
+            {n.title}
+            <span className="block text-[10px] text-slate-400 mt-0.5">{n.source} · {timeAgo(n.publishedAt)}</span>
+          </a>
+          <button onClick={() => markRead(n.id)} className="text-[11px] text-emerald-700 hover:underline shrink-0">
+            ✓ read
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
