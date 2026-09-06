@@ -48,6 +48,7 @@ export default function Home() {
   const [symbol, setSymbol] = useState("");
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     const d = await api.dashboard();
     if (!("error" in d)) setDash(d as Dashboard);
@@ -89,7 +90,13 @@ export default function Home() {
   async function doAdd() {
     if (!symbol.trim()) return;
     setLoading(true);
-    await api.add(symbol);
+    setAddError(null);
+    const r = await api.add(symbol);
+    if (r && "error" in r && r.error) {
+      setAddError(r.error as string);
+      setLoading(false);
+      return;
+    }
     setSymbol("");
     await refresh();
     setLoading(false);
@@ -147,7 +154,7 @@ export default function Home() {
             className="flex-1 border border-slate-300 rounded-lg px-3 py-2"
             placeholder="Add NSE symbol e.g. RELIANCE, TCS, INFY"
             value={symbol}
-            onChange={(e) => setSymbol(e.target.value)}
+            onChange={(e) => { setSymbol(e.target.value); setAddError(null); }}
             onKeyDown={(e) => e.key === "Enter" && doAdd()}
           />
           <button
@@ -155,9 +162,10 @@ export default function Home() {
             disabled={loading}
             className="bg-emerald-600 text-white rounded-lg px-4 font-medium hover:bg-emerald-700 disabled:opacity-50"
           >
-            Add
+            {loading ? "Checking…" : "Add"}
           </button>
         </div>
+        {addError && <p className="mt-1 text-sm text-rose-600">{addError}</p>}
 
         {dash && (
           <>

@@ -18,15 +18,32 @@ export async function getOrCreateUser(handle: string) {
 }
 
 // --- Watchlist mutations ----------------------------------------------------
-export async function addSymbol(userId: string, symbol: string) {
+export async function addSymbol(
+  userId: string,
+  symbol: string
+): Promise<{ ok: boolean; error?: string }> {
   const s = symbol.trim().toUpperCase();
+  if (!s) return { ok: false, error: "Enter a stock symbol." };
+
+  // Validate against the live source BEFORE adding. If it doesn't resolve to
+  // real NSE data, reject it — never create a junk row that sits forever as
+  // "delayed". getQuotes returns [] for anything that isn't a real symbol.
+  const quotes = await getQuotes([s]);
+  if (quotes.length === 0) {
+    return {
+      ok: false,
+      error: `"${symbol.trim()}" isn't a listed NSE symbol. Use the NSE ticker — e.g. RELIANCE, TCS, INFY.`,
+    };
+  }
+
   await prisma.watchlistItem.upsert({
     where: { userId_symbol: { userId, symbol: s } },
     update: {},
     create: { userId, symbol: s },
   });
-  // Warm the cache immediately so the new symbol has data on first view.
+  // Persist the quote we just validated so the symbol has data on first view.
   await refreshSnapshots([s]);
+  return { ok: true };
 }
 
 export async function removeSymbol(userId: string, symbol: string) {

@@ -24,7 +24,8 @@ export async function POST(req: NextRequest) {
   if (!userId) return NextResponse.json({ error: "sign in" }, { status: 401 });
   const { symbol } = await req.json();
   if (!symbol) return NextResponse.json({ error: "symbol required" }, { status: 400 });
-  await addSymbol(userId, symbol);
+  const result = await addSymbol(userId, symbol);
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json(await buildDashboard(userId));
 }
 
