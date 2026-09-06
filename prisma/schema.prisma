@@ -46,11 +46,15 @@ model NewsRead {
 }
 
 model WatchlistItem {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
   symbol    String
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Per-stock "mark as read": when set, this stock's change window starts here
+  // (whichever is later — this or the global watermark). Persisted server-side
+  // so dismissing a card syncs across the user's tabs and devices.
+  seenAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, symbol]) // a symbol appears at most once per user
   @@index([symbol])

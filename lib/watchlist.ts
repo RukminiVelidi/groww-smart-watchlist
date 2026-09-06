@@ -176,11 +176,22 @@ export type Dashboard = {
 
 export async function buildDashboard(userId: string): Promise<Dashboard> {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  const symbols = await getSymbols(userId);
+  const items = await prisma.watchlistItem.findMany({
+    where: { userId },
+    orderBy: { createdAt: "asc" },
+    select: { symbol: true, seenAt: true },
+  });
+  const symbols = items.map((i) => i.symbol);
   const now = Date.now();
-  // Single global watermark: what changed is measured since here, for every
-  // stock, regardless of whether the user read prior updates.
-  const lastSeenAt = user.lastSeenAt;
+  // Per-stock anchor for "what changed" = the LATER of the global watermark and
+  // this stock's own "mark as read" time. The per-stock time is persisted, so a
+  // card dismissed in one tab is reflected in every tab/device.
+  const anchorBySymbol = new Map(
+    items.map((i) => [
+      i.symbol,
+      i.seenAt && i.seenAt > user.lastSeenAt ? i.seenAt : user.lastSeenAt,
+    ])
+  );
 
   const latest = await latestSnapshots(symbols);
   const metas = await prisma.symbolMeta.findMany({
@@ -212,18 +223,20 @@ export async function buildDashboard(userId: string): Promise<Dashboard> {
       source: snap.source,
     };
 
-    // Baseline = latest snapshot at/just-before the global watermark.
+    const anchor = anchorBySymbol.get(symbol) ?? user.lastSeenAt;
+
+    // Baseline = latest snapshot at/just-before this stock's anchor.
     const baseline = await prisma.snapshot.findFirst({
-      where: { symbol, fetchedAt: { lte: lastSeenAt } },
+      where: { symbol, fetchedAt: { lte: anchor } },
       orderBy: { fetchedAt: "desc" },
       select: { price: true },
     });
 
-    // Meaningful events = real news published since the global watermark,
+    // Meaningful events = real news published since this stock's anchor,
     // relevance-filtered so a mis-tagged roundup can't flag a stock or become
     // its headline (same title-verification as the news panel).
     const rawNews = await prisma.newsItem.findMany({
-      where: { symbol, publishedAt: { gt: lastSeenAt, lte: new Date() } },
+      where: { symbol, publishedAt: { gt: anchor, lte: new Date() } },
       orderBy: { publishedAt: "desc" },
       take: 10,
     });
@@ -276,5 +289,14 @@ export async function markSeen(userId: string) {
   await prisma.user.update({
     where: { id: userId },
     data: { lastSeenAt: new Date() },
+  });
+}
+
+// "Mark as read" for ONE stock — persists a per-stock timestamp so the dismissal
+// syncs across the user's tabs and devices (unlike a client-only dismiss).
+export async function markSymbolSeen(userId: string, symbol: string) {
+  await prisma.watchlistItem.updateMany({
+    where: { userId, symbol: symbol.trim().toUpperCase() },
+    data: { seenAt: new Date() },
   });
 }

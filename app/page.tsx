@@ -29,8 +29,11 @@ const api = {
   async remove(symbol: string) {
     return (await fetch("/api/watchlist", { method: "DELETE", body: JSON.stringify({ symbol }) })).json();
   },
-  async seen() {
-    return (await fetch("/api/seen", { method: "POST" })).json();
+  async seen(symbol?: string) {
+    return (await fetch("/api/seen", {
+      method: "POST",
+      body: symbol ? JSON.stringify({ symbol }) : undefined,
+    })).json();
   },
   async signOut() {
     return (await fetch("/api/session", { method: "DELETE" })).json();
@@ -66,9 +69,6 @@ export default function Home() {
   const [dash, setDash] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
-  // "Mark as read" is a client-side dismiss — moves a card out of "Needs your
-  // attention" for this view. We never store read-state; on reload it's fresh.
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const refresh = useCallback(async () => {
     const d = await api.dashboard();
     if (!("error" in d)) setDash(d as Dashboard);
@@ -255,33 +255,36 @@ export default function Home() {
         {addError && <p className="mt-1 text-sm text-rose-600">{addError}</p>}
 
         {dash && (() => {
-          const attention = dash.changes.filter((c) => !dismissed.has(c.symbol));
-          const cleared = dash.changes.filter((c) => dismissed.has(c.symbol));
-          const everythingElse = [...cleared, ...dash.quiet];
           const onRemove = async (s: string) => { await api.remove(s); refresh(); };
+          // Server-persisted: marking read advances this stock's watermark, so
+          // it drops to "Everything else" and the change syncs across devices.
+          const onMarkRead = async (s: string) => {
+            const d = await api.seen(s);
+            if (!("error" in d)) setDash(d as Dashboard);
+          };
           return (
             <>
               <Section title="Needs your attention" subtitle="Meaningful changes since you last checked">
-                {attention.length === 0 && (
+                {dash.changes.length === 0 && (
                   <p className="text-sm text-slate-500 px-1 py-6">
                     No meaningful changes since you last checked.
                   </p>
                 )}
-                {attention.map((c) => (
+                {dash.changes.map((c) => (
                   <ChangeCard
                     key={c.symbol}
                     c={c}
                     stale={dash.staleness[c.symbol]}
                     highlight
-                    onMarkRead={(s) => setDismissed((prev) => new Set(prev).add(s))}
+                    onMarkRead={onMarkRead}
                     onRemove={onRemove}
                   />
                 ))}
               </Section>
 
-              {everythingElse.length > 0 && (
+              {dash.quiet.length > 0 && (
                 <Section title="Everything else" subtitle="No meaningful change">
-                  {everythingElse.map((c) => (
+                  {dash.quiet.map((c) => (
                     <ChangeCard key={c.symbol} c={c} stale={dash.staleness[c.symbol]} onRemove={onRemove} />
                   ))}
                 </Section>
