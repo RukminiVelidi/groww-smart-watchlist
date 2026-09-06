@@ -44,18 +44,22 @@ to look at first:
 | **Price (volatility-relative)** | move since last checked ÷ the stock's typical daily move (a z-score) | Normalises for the stock's own volatility — the whole thesis in one line |
 | **Volume** | today's volume vs its 3-month average | A volume spike is conviction: *something happened* |
 | **Breakout** | crossed/near its 52-week high or low | A discrete technical event traders act on |
-| **Circuit** | locked in upper/lower circuit | A hard, unambiguous extreme-move signal |
 | **News** | a real headline published *since your last visit* | Fresh news is the clearest "something happened" |
+
+*(No "circuit" signal on purpose: real per-stock circuit bands aren't available
+from a free feed, and hardcoding ±20% would be a fabricated number — we score
+only signals we can source honestly.)*
 
 Signals combine via **weighted noisy-OR**: each is independent evidence that
 "something happened", so multiple moderate signals compound (correctly ranking
 above a single strong one) but the total never exceeds 1. The dominant signal
 becomes the plain-English headline on each card.
 
-The stock's "typical daily move" comes from its own realised volatility once
-there are ≥3 days of history; before that it falls back to a **market-cap-based
-prior** (size strongly predicts volatility) — a principled prior, not a magic
-number.
+The stock's "typical daily move" is its **own realised volatility**, computed
+from the same 3-month daily closes we already fetch (standard deviation of daily
+returns) — so "big for *this* stock" is genuinely per-stock, at zero extra API
+cost. A market-cap prior remains only as a last resort for a symbol with no
+usable history.
 
 ---
 
@@ -68,9 +72,9 @@ number.
 | News (the "meaningful event" signal) | **Google News RSS**, queried by the real company name, deduped, throttled per symbol | none |
 
 These are the free equivalents of what paid apps license (Groww uses Refinitiv
-for fundamentals and exchange feeds for prices). If a source is unreachable, the
-price path degrades to a clearly-labelled `mock` quote and the news path yields
-no events — **the app never fabricates data.**
+for fundamentals and exchange feeds for prices). If a source is unreachable, we
+keep the **last real snapshot** (ageing into a *delayed* badge) and the news path
+yields no events — **the app never fabricates data.**
 
 ---
 
@@ -80,7 +84,7 @@ no events — **the app never fabricates data.**
 Browser (React) ── /api ──▶ App server (Next.js)
                               ├─ Watchlist API        (CRUD, per user)
                               ├─ Change Engine         (5-signal attention score)
-                              └─ Market-Data Adapter    (Yahoo + mock fallback,
+                              └─ Market-Data Adapter    (Yahoo; realized vol;
                                                          staleness + provenance)
                                      │
                         Postgres ◀───┤   append-only snapshots
@@ -104,11 +108,11 @@ Browser (React) ── /api ──▶ App server (Next.js)
 - **Stale / delayed data:** every quote carries `fetchedAt` + `source`; the UI
   shows a **delayed** badge past a freshness TTL. Staleness is computed at *read*
   time (a function of "now"), never by mutating rows.
-- **Conflicting sources:** the adapter dedupes by symbol and prefers the
-  freshest, most-authoritative source (live over mock) — deterministic.
-- **Source down / bad rows:** per-symbol fallback to a mock feed; one bad symbol
-  never poisons the batch, and the app degrades instead of crashing. *(The smoke
-  test demonstrates this: with no network, every symbol resolves via mock.)*
+- **Conflicting / duplicate data:** the adapter dedupes by symbol and keeps the
+  freshest; news is deduped by (symbol, url) — deterministic.
+- **Source down / bad rows:** a failed symbol is **omitted, never fabricated**;
+  because snapshots are append-only, its last real value keeps showing and ages
+  into a *delayed* badge. One bad symbol never poisons the batch.
 - **Race on the watermark:** `lastSeenAt` moves only on an explicit, atomic
   "mark as seen". Combined with append-only snapshots, reads can't tear and
   background polls can't lose the update.
@@ -138,7 +142,7 @@ Browser (React) ── /api ──▶ App server (Next.js)
 | Snapshots | append-only | mutate-in-place | required for correct deltas; kills races |
 | "Meaningful" | volatility-relative + multi-signal | fixed % threshold | a fixed % mis-scores both stable and volatile stocks |
 | Watermark | one per user | per-symbol watermarks / lookback selector | faithful to "since I last checked"; no per-row noise, no scope creep |
-| Data | real API + mock fallback | mock only / real only | real makes staleness genuine; fallback keeps it resilient |
+| Data | real API only; last-known snapshot on failure | fabricated mock fallback | never invent prices; append-only history is the honest fallback |
 
 ## Deliberately out of scope
 
@@ -155,7 +159,7 @@ Naming *when* I'd add each turns every omission into a judgement call, not a gap
 
 ```
 lib/change-engine.ts   the "meaningful change" scoring (pure, unit-testable)
-lib/market/adapter.ts  prices: Yahoo v8/chart + mock fallback, staleness/provenance
+lib/market/adapter.ts  prices: Yahoo v8/chart, realized volatility, staleness/provenance
 lib/market/news.ts     news: Google News RSS reader (dependency-free parser)
 lib/watchlist.ts       service layer: snapshots, news refresh, dashboard, watermark
 prisma/schema.prisma   data model (doubles as documentation)

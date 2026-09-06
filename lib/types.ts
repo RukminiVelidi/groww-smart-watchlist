@@ -12,11 +12,10 @@ export type Quote = {
   dayLow: number | null;
   volume: number | null;
   avgVolume: number | null;
+  volatilityPct: number | null; // realized daily volatility from 3-month history
   week52High: number | null;
   week52Low: number | null;
   marketCap: number | null;
-  upperCircuit: number | null;
-  lowerCircuit: number | null;
   source: string;
   fetchedAt: string; // ISO
 };
@@ -24,7 +23,7 @@ export type Quote = {
 // A scored change for one symbol, ready to render in the "Since you last
 // checked" panel.
 export type ChangeSignal = {
-  kind: "PRICE" | "VOLUME" | "BREAKOUT" | "CIRCUIT" | "EVENT";
+  kind: "PRICE" | "VOLUME" | "BREAKOUT" | "EVENT";
   score: number; // 0..1
   reason: string; // plain English
 };

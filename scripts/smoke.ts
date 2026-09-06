@@ -13,11 +13,10 @@ function base(overrides: Partial<Quote>): Quote {
     dayLow: 99,
     volume: 1_000_000,
     avgVolume: 1_000_000,
+    volatilityPct: null, // let the engine use dailyReturns / prior in tests
     week52High: 140,
     week52Low: 70,
     marketCap: 6e12,
-    upperCircuit: 120,
-    lowerCircuit: 80,
     source: "test",
     fetchedAt: new Date().toISOString(),
     ...overrides,
@@ -74,10 +73,11 @@ console.log("event:", event.attentionScore, "|", event.headline);
 console.log("\nassert spike > smallcap (same % move):", spike.attentionScore > smallCap.attentionScore);
 console.log("assert quiet below 0.25:", quiet.attentionScore < 0.25);
 
-console.log("\n=== Adapter (network -> mock fallback) ===");
+console.log("\n=== Adapter (real Yahoo; returns only real quotes) ===");
 getQuotes(["RELIANCE", "TCS"]).then((qs) => {
+  if (qs.length === 0) console.log("(no network here — returns empty rather than fabricating)");
   for (const q of qs) {
-    console.log(`${q.symbol}: Rs ${q.price} (${q.dayChangePct}%) vol=${q.volume} src=${q.source}`);
+    console.log(`${q.symbol}: Rs ${q.price} (${q.dayChangePct}%) vol=${q.volume} volatility=${q.volatilityPct}% src=${q.source}`);
   }
   process.exit(0);
 });

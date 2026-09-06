@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // The poller. Runs on a schedule (Vercel Cron). Fetches every UNIQUE symbol
-// once — shared across all users — plus a seed set so the demo always has data.
-// This is the scale story: cost is O(unique symbols), not O(users x symbols).
+// once — shared across all users (an optional seed set can keep extra symbols
+// warm). This is the scale story: cost is O(unique symbols), not O(users x symbols).
 export async function GET() {
   const watched = await prisma.watchlistItem.findMany({
     distinct: ["symbol"],

@@ -50,13 +50,12 @@ model Snapshot {
   dayHigh      Float?
   dayLow       Float?
   volume       Float?
-  avgVolume    Float? // vendor 3-month average — a stable volume baseline
+  avgVolume    Float? // 3-month average — a stable volume baseline
+  volatilityPct Float? // realized daily volatility (%) from 3-month closes
   week52High   Float?
   week52Low    Float?
   marketCap    Float?
-  upperCircuit Float?
-  lowerCircuit Float?
-  source       String // e.g. "yahoo", "mock" — provenance for conflict resolution
+  source       String // data provenance (e.g. "yahoo")
   fetchedAt    DateTime @default(now())
   stale        Boolean  @default(false) // true if served from cache past freshness TTL
 

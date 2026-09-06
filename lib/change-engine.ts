@@ -15,7 +15,6 @@ import type { Quote, ChangeSignal, SymbolChange } from "@/lib/types";
 // continuous drift, so they carry more weight.
 const WEIGHTS: Record<ChangeSignal["kind"], number> = {
   EVENT: 1.0,
-  CIRCUIT: 1.0,
   BREAKOUT: 0.9,
   PRICE: 0.8,
   VOLUME: 0.6,
@@ -56,7 +55,11 @@ export function scoreSymbol(input: ScoreInput): SymbolChange {
   const { quote, baselinePrice, dailyReturns, events } = input;
   const signals: ChangeSignal[] = [];
 
+  // Prefer the stock's OWN realized volatility (from the 3-month close series,
+  // attached to the quote). Fall back to volatility computed from our collected
+  // snapshots, then to a market-cap-based prior only if we have neither.
   const vol =
+    (quote.volatilityPct && quote.volatilityPct > 0 ? quote.volatilityPct : null) ??
     realizedVolatilityPct(dailyReturns) ??
     typicalDailyMovePct(quote.marketCap);
 
@@ -109,17 +112,7 @@ export function scoreSymbol(input: ScoreInput): SymbolChange {
     });
   }
 
-  // --- CIRCUIT: a hard, unambiguous extreme-move signal. ---
-  if (quote.upperCircuit !== null && quote.price >= quote.upperCircuit * 0.999) {
-    signals.push({ kind: "CIRCUIT", score: 1, reason: "Locked in upper circuit" });
-  } else if (
-    quote.lowerCircuit !== null &&
-    quote.price <= quote.lowerCircuit * 1.001
-  ) {
-    signals.push({ kind: "CIRCUIT", score: 1, reason: "Locked in lower circuit" });
-  }
-
-  // --- EVENT: scheduled fundamental news since the user last looked. ---
+  // --- EVENT: real news published since the user last looked. ---
   for (const e of events) {
     signals.push({
       kind: "EVENT",

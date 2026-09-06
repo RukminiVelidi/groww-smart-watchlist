@@ -3,24 +3,36 @@ import type { Quote } from "@/lib/types";
 // ---------------------------------------------------------------------------
 // Market-data adapter.
 //
-// Primary source: Yahoo Finance public quote endpoint (no API key, covers NSE
-// via the ".NS" suffix, returns every signal we need in one batched call).
-// Because it is delayed/consolidated data, our staleness handling is a REAL
-// concern, not a staged one.
+// Source: Yahoo Finance v8 chart endpoint (no API key, crumb-free, covers NSE
+// via the ".NS" suffix). A 3-month daily window returns the live quote in
+// `meta` PLUS the daily close/volume series — from which we derive the stock's
+// own average volume and realized volatility.
 //
-// Fallback: a deterministic mock generator. If Yahoo is unreachable or returns
-// garbage for a symbol, we degrade gracefully to mock rather than crash — and
-// the mock lets us script exact "meaningful change" scenarios for the demo.
+// We NEVER fabricate data. If a symbol fails or returns garbage, we return
+// nothing for it this cycle; because snapshots are append-only, the last real
+// value keeps showing (ageing into a "delayed" badge), and a never-fetched
+// symbol is shown as awaiting data. Real, or honestly absent — never invented.
 // ---------------------------------------------------------------------------
 
-// Yahoo's v8 chart endpoint is crumb-free and reliable (the v7 quote endpoint
-// now requires an authenticated crumb). A 3-month daily window gives us the
-// live quote in `meta` AND the daily volume series, from which we derive a
-// stable average-volume baseline for the volume signal.
 const YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart";
 
 function toNum(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+// Realized daily volatility (%) = standard deviation of daily close-to-close
+// returns over the 3-month series. This is the stock's own "typical daily
+// move" — what the change engine normalizes price moves against.
+function realizedVolatilityPct(closes: number[]): number | null {
+  if (closes.length < 6) return null; // need enough history to be meaningful
+  const rets: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    rets.push(((closes[i] - closes[i - 1]) / closes[i - 1]) * 100);
+  }
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const variance =
+    rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1);
+  return +Math.sqrt(variance).toFixed(3);
 }
 
 async function fetchOneFromYahoo(symbol: string): Promise<Quote | null> {
@@ -40,7 +52,7 @@ async function fetchOneFromYahoo(symbol: string): Promise<Quote | null> {
     chart?: {
       result?: {
         meta?: Record<string, unknown>;
-        indicators?: { quote?: { volume?: (number | null)[] }[] };
+        indicators?: { quote?: { volume?: (number | null)[]; close?: (number | null)[] }[] };
       }[];
     };
   };
@@ -60,6 +72,14 @@ async function fetchOneFromYahoo(symbol: string): Promise<Quote | null> {
   const avgVolume =
     vols.length > 0 ? vols.reduce((a, b) => a + b, 0) / vols.length : null;
 
+  // The stock's OWN realized daily volatility, computed from the same 3-month
+  // daily close series — this is the true "typical daily move" the change
+  // engine normalizes against (no extra API call, no size-based guess).
+  const closes = (r?.indicators?.quote?.[0]?.close ?? []).filter(
+    (c): c is number => typeof c === "number" && c > 0
+  );
+  const volatilityPct = realizedVolatilityPct(closes);
+
   return {
     symbol,
     name:
@@ -75,12 +95,10 @@ async function fetchOneFromYahoo(symbol: string): Promise<Quote | null> {
     dayLow: toNum(meta.regularMarketDayLow),
     volume: toNum(meta.regularMarketVolume),
     avgVolume,
+    volatilityPct,
     week52High: toNum(meta.fiftyTwoWeekHigh),
     week52Low: toNum(meta.fiftyTwoWeekLow),
-    marketCap: null, // not exposed here; engine falls back to realized vol / prior
-    // Yahoo doesn't expose circuit bands; NSE default for most is +/-20%.
-    upperCircuit: +(prevClose * 1.2).toFixed(2),
-    lowerCircuit: +(prevClose * 0.8).toFixed(2),
+    marketCap: null, // not exposed here; volatility comes from the close series
     source: "yahoo",
     fetchedAt: new Date().toISOString(),
   };
@@ -98,50 +116,13 @@ async function fetchFromYahoo(symbols: string[]): Promise<Map<string, Quote>> {
   return out;
 }
 
-// Deterministic-ish mock: stable base price per symbol (hashed) plus a random
-// daily move. Occasionally produces a large move / volume spike so the demo
-// always has something "meaningful" to show.
-function mockQuote(symbol: string): Quote {
-  const seed = [...symbol].reduce((a, c) => a + c.charCodeAt(0), 0);
-  const base = 100 + (seed % 2000);
-  const move = (Math.random() - 0.5) * 8; // +/-4% typical
-  const spike = Math.random() < 0.2; // 20% chance of an eventful move
-  const dayChangePct = spike ? move * 3 : move;
-  const prevClose = base;
-  const price = +(prevClose * (1 + dayChangePct / 100)).toFixed(2);
-  const avgVolume = 1_000_000 + (seed % 5) * 500_000;
-  return {
-    symbol,
-    name: symbol,
-    price,
-    prevClose,
-    dayChangePct: +dayChangePct.toFixed(2),
-    dayHigh: +(price * 1.01).toFixed(2),
-    dayLow: +(price * 0.99).toFixed(2),
-    volume: Math.round(avgVolume * (spike ? 3 + Math.random() * 2 : 0.8 + Math.random())),
-    avgVolume,
-    week52High: +(base * 1.4).toFixed(2),
-    week52Low: +(base * 0.7).toFixed(2),
-    marketCap: base * avgVolume,
-    upperCircuit: +(prevClose * 1.2).toFixed(2),
-    lowerCircuit: +(prevClose * 0.8).toFixed(2),
-    source: "mock",
-    fetchedAt: new Date().toISOString(),
-  };
-}
-
-// Public entry point. Fetches all symbols in one Yahoo call; any symbol Yahoo
-// omits or fails falls back to mock. Per-symbol fallback means one bad symbol
-// never poisons the whole batch.
+// Public entry point. Fetches all symbols in parallel and returns ONLY the ones
+// that resolved to real data. Symbols that fail are omitted (no fabricated
+// rows); the caller keeps the last real snapshot for them.
 export async function getQuotes(symbols: string[]): Promise<Quote[]> {
   const unique = [...new Set(symbols.map((s) => s.toUpperCase().trim()))].filter(
     Boolean
   );
-  let live = new Map<string, Quote>();
-  try {
-    live = await fetchFromYahoo(unique);
-  } catch {
-    // whole-batch failure -> everything falls back to mock below
-  }
-  return unique.map((s) => live.get(s) ?? mockQuote(s));
+  const live = await fetchFromYahoo(unique);
+  return unique.map((s) => live.get(s)).filter((q): q is Quote => q != null);
 }

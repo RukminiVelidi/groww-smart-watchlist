@@ -46,8 +46,8 @@ and in a way that persists across sessions and devices.
    user configures nothing.
 2. **Relative, not absolute.** Significance is measured against each stock's own
    volatility and history.
-3. **Never fabricate.** Real data or an honestly-labelled fallback — never a
-   silent guess.
+3. **Never fabricate.** Real data, the last-known value, or honest absence —
+   never an invented number.
 4. **Correct under concurrency.** Append-only state; no torn reads, no lost
    writes.
 5. **Simple until complexity earns its place.** Every component must be
@@ -134,7 +134,7 @@ flowchart TB
 | **API Routes** | Thin HTTP boundary; auth via handle cookie; force-dynamic |
 | **Service Layer** | Orchestrates reads/writes; builds the dashboard; owns the watermark |
 | **Change Engine** | Pure function: scores change signals into an attention score |
-| **Market-Data Adapter** | Normalises quotes; tags provenance & staleness; mock fallback |
+| **Market-Data Adapter** | Normalises quotes; computes realized volatility; tags provenance & staleness; omits (never fabricates) failed symbols |
 | **News Reader** | Fetches/parses Google News RSS; dedupes; throttles per symbol |
 | **Persistence** | Append-only snapshots + relational state (Prisma/Postgres) |
 | **Scheduler** | Triggers `/api/poll` to refresh shared, per-symbol data |
@@ -185,7 +185,7 @@ sequenceDiagram
     P->>DB: SELECT DISTINCT symbol (all users) + seed set
     P->>S: refreshSnapshots(uniqueSymbols)
     S->>ADP: getQuotes(symbols)   %% one batch, shared by all users
-    ADP->>ADP: Yahoo v8/chart per symbol → mock fallback on failure
+    ADP->>ADP: Yahoo v8/chart per symbol → omit on failure (keep last snapshot)
     ADP-->>S: normalized quotes (source, fetchedAt)
     S->>DB: INSERT snapshots (append-only)
     S->>NEWS: refresh news (throttled per symbol, parallel)
@@ -222,9 +222,8 @@ erDiagram
         float avgVolume
         float week52High
         float week52Low
-        float upperCircuit
-        float lowerCircuit
-        string source "provenance: yahoo | mock"
+        float volatilityPct "realized daily volatility (3-mo)"
+        string source "provenance: yahoo"
         datetime fetchedAt
     }
     NewsItem {
@@ -264,14 +263,19 @@ continuous drift.
 | Signal | Definition | Weight |
 |---|---|---|
 | **News** | a real headline published since the anchor | 1.0 |
-| **Circuit** | price locked in upper/lower circuit | 1.0 |
 | **Breakout** | crossed / near 52-week high or low | 0.9 |
 | **Price (volatility-relative)** | `|move since anchor| ÷ typical daily move` (z-score) | 0.8 |
 | **Volume** | today's volume ÷ 3-month average | 0.6 |
 
-**Typical daily move** = the stock's realized volatility from ≥3 days of history;
-otherwise a market-cap-based prior (large-cap ≈ 1.2%, mid ≈ 1.8%, small ≈ 2.8%) —
-a principled prior, since size strongly predicts volatility.
+*(A circuit signal was intentionally dropped: real per-stock circuit bands are
+not available from a free feed, and hardcoding ±20% would be a fabricated band —
+so we score only signals we can source honestly.)*
+
+**Typical daily move** = the stock's **realized volatility**, computed as the
+standard deviation of daily close-to-close returns over the 3-month series the
+adapter already fetches — a true per-stock figure at zero extra API cost. A
+market-cap-based prior (large ≈ 1.2%, mid ≈ 1.8%, small ≈ 2.8%) is used only as a
+last resort for a symbol with no usable history.
 
 **Combination — weighted noisy-OR.** Each signal is independent evidence that
 "something happened", so multiple moderate signals compound while the total stays
@@ -318,7 +322,7 @@ All data routes are `force-dynamic` and identity-scoped via the handle cookie.
 | Price history | Append-only snapshots | Mutate-in-place latest row | Correct deltas + race-free by construction |
 | Significance | Volatility-relative multi-signal | Fixed % threshold | Fixed % mis-scores stable and volatile names alike |
 | "Last checked" | One watermark per user | Per-symbol watermarks / lookback selector | Faithful to "since I last checked"; no per-row noise, no scope creep |
-| Data | Real API + mock fallback | Mock-only / real-only | Real makes staleness genuine; fallback keeps it resilient |
+| Data | Real API only; last-known snapshot on failure | Fabricated mock fallback | Never invent prices; append-only history is the honest fallback |
 | Ingestion | Single per-symbol poller | Per-user polling / queue+stream | O(unique symbols); a queue would be over-engineering at this scale |
 
 ---
@@ -327,9 +331,9 @@ All data routes are `force-dynamic` and identity-scoped via the handle cookie.
 
 | Failure | Handling |
 |---|---|
-| Upstream (Yahoo) down / bad row | Per-symbol fallback to a labelled `mock` quote; one bad symbol never poisons the batch |
+| Upstream (Yahoo) down / bad row | Failed symbol omitted (never fabricated); last real snapshot keeps showing and ages into a "delayed" badge; one bad symbol never poisons the batch |
 | Stale / delayed data | `fetchedAt` + `source` on every quote; UI shows a **delayed** badge past a freshness TTL; staleness computed at read time |
-| Conflicting sources | Adapter dedupes by symbol; prefers freshest, most-authoritative source (live > mock) |
+| Conflicting / duplicate data | Adapter dedupes by symbol and keeps the freshest; news deduped by (symbol, url) |
 | News source failure | Best-effort; prices already persisted; dashboard renders without events |
 | Concurrency (poll writes while user reads) | Append-only snapshots + atomic single-write watermark → no torn reads, no lost updates |
 | Slow upstream | 6s request timeout on every outbound fetch; request path never hangs |
@@ -372,8 +376,8 @@ This:    cost = |⋃_users symbols_u|  = O(unique symbols)  → independent of u
 ## 14. Observability & Operations
 
 - The poll endpoint returns `{ polled, sources, at }` — a live view of how many
-  symbols resolved from each provider (e.g. `{ yahoo: 5, mock: 1 }`), which is
-  the primary health signal for data quality.
+  symbols resolved successfully (e.g. `{ yahoo: 6 }`), which is the primary
+  health signal for data quality.
 - Provenance (`source`) and `fetchedAt` on every snapshot make data lineage
   auditable directly from the database.
 - Autonomous freshness: a server cron (`vercel.json`) drives `/api/poll`; active
@@ -388,9 +392,9 @@ This:    cost = |⋃_users symbols_u|  = O(unique symbols)  → independent of u
   returns, news) → score, unit-testable without a database or network.
   `scripts/smoke.ts` exercises the discriminating cases: same % move scoring
   higher for a large-cap than a small-cap, quiet moves falling below threshold,
-  and breakout/circuit/news firing.
-- **Resilience is observable in the smoke run:** with no network, every symbol
-  resolves via the mock fallback — demonstrating graceful degradation.
+  and breakout/news firing.
+- **Honesty is observable in the smoke run:** with no network the adapter returns
+  an empty result rather than fabricating quotes — real, or nothing.
 
 ---
 
@@ -425,5 +429,5 @@ This:    cost = |⋃_users symbols_u|  = O(unique symbols)  → independent of u
   moment.
 - **Attention score** — the `[0,1]` weighted noisy-OR combination of signals used
   to rank symbols.
-- **Provenance** — the recorded source of a quote (`yahoo` | `mock`) used for
-  conflict resolution and honesty in the UI.
+- **Provenance** — the recorded source of a quote (`yahoo`) and its `fetchedAt`,
+  used for staleness and data-lineage honesty.

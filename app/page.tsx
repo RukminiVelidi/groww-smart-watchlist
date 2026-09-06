@@ -221,12 +221,9 @@ function ChangeCard({
             <span className="text-slate-500 text-sm">₹{c.current.price.toLocaleString("en-IN")}</span>
           )}
           {stale?.stale && (
-            <span className="text-[10px] uppercase tracking-wide bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded" title={`Last quote ${stale.ageSeconds}s ago from ${stale.source}`}>
+            <span className="text-[10px] uppercase tracking-wide bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded" title={`Last quote ${stale.ageSeconds}s ago`}>
               delayed
             </span>
-          )}
-          {stale && stale.source === "mock" && (
-            <span className="text-[10px] uppercase tracking-wide bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">mock</span>
           )}
         </div>
         <p className={`text-sm mt-1 ${highlight ? "text-slate-800" : "text-slate-500"}`}>{c.headline}</p>
