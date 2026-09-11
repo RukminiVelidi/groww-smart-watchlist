@@ -100,7 +100,9 @@ async function fetchOneFromYahoo(symbol: string): Promise<Quote | null> {
     week52Low: toNum(meta.fiftyTwoWeekLow),
     marketCap: null, // not exposed here; volatility comes from the close series
     source: "yahoo",
-    fetchedAt: new Date().toISOString(),
+    fetchedAt: meta.regularMarketTime
+      ? new Date((meta.regularMarketTime as number) * 1000).toISOString()
+      : new Date().toISOString(),
   };
 }
 
