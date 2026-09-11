@@ -92,6 +92,7 @@ export async function refreshSnapshots(symbols: string[]): Promise<Quote[]> {
       week52Low: q.week52Low,
       marketCap: q.marketCap,
       source: q.source,
+      fetchedAt: new Date(q.fetchedAt),
     })),
   });
 
